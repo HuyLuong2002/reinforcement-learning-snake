@@ -1,0 +1,14 @@
+{
+  "q_mean": 2.552124706204517,
+  "q_std": 13.103296233037344,
+  "q_max": 85.8843065327093,
+  "q_min": -37.67300721571981,
+  "nonzero_states": 4707,
+  "agent": "sarsa",
+  "best_eval_score": 31.96,
+  "best_episode": 33000,
+  "final_episode": 40000,
+  "best_checkpoint": "agent_best.pkl",
+  "final_checkpoint": "agent.pkl",
+  "last_checkpoint": "agent_last.pkl"
+}
