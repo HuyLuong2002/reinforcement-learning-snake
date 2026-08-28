@@ -8,9 +8,18 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from common.run_store import agent_output_root, latest_model_path, list_model_runs
+
 
 class PlayableAgent(Protocol):
     def greedy_policy_action(self, state: np.ndarray) -> int: ...
+
+    def choose_action(
+        self,
+        state: np.ndarray,
+        greedy: bool = False,
+        forbidden: int | None = None,
+    ) -> int: ...
 
     @classmethod
     def load(cls, path: Path) -> Any: ...
@@ -25,15 +34,12 @@ class AgentSpec:
     load_fn: type[PlayableAgent]
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
 def _sarsa_output_dir() -> Path:
-    return PROJECT_ROOT / "output" / "sarsa" / "training"
+    return agent_output_root("sarsa")
 
 
 def _q_learning_output_dir() -> Path:
-    return PROJECT_ROOT / "output" / "q_learning" / "training"
+    return agent_output_root("q_learning")
 
 
 def _load_sarsa(path: Path):
@@ -80,33 +86,17 @@ def get_agent_spec(agent_name: str) -> AgentSpec:
 
 
 def model_search_paths(spec: AgentSpec) -> list[Path]:
-    """Thứ tự ưu tiên load model."""
-    out = spec.output_dir
-    paths = [
-        out / "agent.pkl",
-        out / "agent_best.pkl",
-        out / "agent_last.pkl",
-    ]
-    if spec.name == "sarsa":
-        legacy = PROJECT_ROOT / "output" / "training"
-        paths.extend(
-            [
-                legacy / "sarsa_agent.pkl",
-                legacy / "sarsa_agent_best.pkl",
-                legacy / "sarsa_agent_last.pkl",
-            ]
-        )
-    return paths
+    """Mọi file model có thể load, lần train mới nhất trước."""
+    return [run.model_path for run in list_model_runs(spec.name)]
 
 
 def load_agent(agent_name: str) -> tuple[PlayableAgent | None, AgentSpec, bool]:
     """
-    Trả về (agent, spec, model_missing).
-    model_missing=True nếu không tìm thấy file model.
+    Load model mới nhất. Trả về (agent, spec, model_missing).
     """
     spec = get_agent_spec(agent_name)
-    for path in model_search_paths(spec):
-        if path.exists():
-            print(f"Loaded model: {path}")
-            return spec.load_fn(path), spec, False
-    return None, spec, True
+    path = latest_model_path(agent_name)
+    if path is None:
+        return None, spec, True
+    print(f"Loaded model: {path}")
+    return spec.load_fn(path), spec, False

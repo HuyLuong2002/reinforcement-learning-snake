@@ -1,7 +1,9 @@
 """Môi trường Snake — tuân chuẩn Gymnasium.
 
 State tabular 7 chiều:
-  [food_dx, food_dy, safety_straight, safety_left, safety_right, direction, length_bucket]
+  [food_dx, food_dy, safety_straight, safety_left, safety_right, direction, fill_bucket]
+
+fill_bucket = mật độ bàn 0–4 (~20% ô/bậc), chung cho 10×10, 15×20 và 30×30.
 
 Điểm mấu chốt là 3 chiều `safety`: với mỗi hướng đi (thẳng / trái / phải), env chạy
 BFS thử sau khi di chuyển để biết hướng đó dẫn vào ngõ cụt hay còn đường thoát.
@@ -11,7 +13,8 @@ chỉ số reachable chung cho cả bàn cờ không diễn tả được.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from heapq import heappop, heappush
 
 import gymnasium as gym
 import numpy as np
@@ -41,9 +44,9 @@ INITIAL_SNAKE_LENGTH = 3
 # Nếu còn tới được đuôi thì rắn luôn có thể bám theo đuôi mà sống tiếp, nên đó
 # là ranh giới an toàn tự nhiên — và không phụ thuộc vào độ dài rắn.
 SAFETY_COLLISION = 0  # đâm tường/thân ngay lập tức
-SAFETY_TRAP = 1       # số ô tới được < độ dài rắn → không đủ chỗ chứa thân, chết chắc
-SAFETY_TIGHT = 2      # đủ chỗ nhưng mất dấu đuôi → rủi ro cao
-SAFETY_OPEN = 3       # còn tới được đuôi → an toàn
+SAFETY_TRAP = 1  # số ô tới được < độ dài rắn → không đủ chỗ chứa thân, chết chắc
+SAFETY_TIGHT = 2  # đủ chỗ nhưng mất dấu đuôi → rủi ro cao
+SAFETY_OPEN = 3  # còn tới được đuôi → an toàn
 
 
 @dataclass
@@ -65,22 +68,31 @@ class SnakeEnv(gym.Env):
         max_steps: int = 2000,
         max_steps_without_food: int = 100,
         reward_food: float = 10.0,
-        reward_death: float = -10.0,
-        reward_step: float = -0.01,
-        reward_closer: float = 0.02,
-        death_penalty_per_score: float = 0.5,
+        reward_death: float = -40.0,
+        reward_self_bite: float = -55.0,
+        reward_step: float = -0.05,
+        reward_keep_tail: float = 0.08,
+        reward_unsafe: float = 0.8,
+        death_penalty_per_score: float = 1.0,
+        width: int | None = None,
+        height: int | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
         super().__init__()
-        self.grid_size = grid_size
+        self.width = int(width if width is not None else grid_size)
+        self.height = int(height if height is not None else grid_size)
         self.max_steps = max_steps
         self.max_steps_without_food = max_steps_without_food
         self.reward_food = reward_food
         self.reward_death = reward_death
+        self.reward_self_bite = reward_self_bite
         self.reward_step = reward_step
-        self.reward_closer = reward_closer
+        self.reward_keep_tail = reward_keep_tail
+        self.reward_unsafe = reward_unsafe
         self.death_penalty_per_score = death_penalty_per_score
         self.rng = rng or np.random.default_rng()
+        self._obs_direction = RIGHT
+        self._obs_safety = (SAFETY_OPEN, SAFETY_OPEN, SAFETY_OPEN)
 
         self.action_space = spaces.Discrete(4)
         self.observation_space = spaces.MultiDiscrete([3, 3, 4, 4, 4, 4, 5])
@@ -94,16 +106,139 @@ class SnakeEnv(gym.Env):
     def n_state_dims(self) -> tuple[int, ...]:
         return tuple(int(n) for n in self.observation_space.nvec)
 
+    @property
+    def n_cells(self) -> int:
+        return self.width * self.height
+
+    def _in_bounds(self, x: int, y: int) -> bool:
+        return 0 <= x < self.width and 0 <= y < self.height
+
     @staticmethod
-    def max_score(grid_size: int, initial_length: int = INITIAL_SNAKE_LENGTH) -> int:
-        return grid_size * grid_size - initial_length
+    def max_score(
+        width: int,
+        height: int | None = None,
+        initial_length: int = INITIAL_SNAKE_LENGTH,
+    ) -> int:
+        if height is None:
+            height = width
+        return width * height - initial_length
 
     def _manhattan(self, a: tuple[int, int], b: tuple[int, int]) -> int:
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-    def _length_bucket(self) -> int:
+    def _path_blocked_cells(self) -> set[tuple[int, int]]:
+        """
+        Ô thân chặn A* — không tính đầu (điểm bắt đầu) và đuôi (sẽ rời nếu không ăn).
+        """
         assert self.state is not None
-        return min(self.state.score // 5, 4)
+        snake = self.state.snake
+        if len(snake) <= 2:
+            return set()
+        return set(snake[1:-1])
+
+    def astar_path(
+        self,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        blocked: set[tuple[int, int]] | None = None,
+    ) -> list[tuple[int, int]] | None:
+        """Đường A* 4 hướng từ start tới goal; None nếu không tới được."""
+        if start == goal:
+            return [start]
+        w, h = self.width, self.height
+        if blocked is None:
+            blocked = self._path_blocked_cells()
+
+        def heur(p: tuple[int, int]) -> int:
+            return abs(p[0] - goal[0]) + abs(p[1] - goal[1])
+
+        heap: list[tuple[int, int, tuple[int, int]]] = [(heur(start), 0, start)]
+        best = {start: 0}
+        closed: set[tuple[int, int]] = set()
+        came_from: dict[tuple[int, int], tuple[int, int]] = {}
+
+        while heap:
+            _, cost, node = heappop(heap)
+            if node in closed:
+                continue
+            if node == goal:
+                path = [node]
+                while path[-1] != start:
+                    path.append(came_from[path[-1]])
+                path.reverse()
+                return path
+            closed.add(node)
+            x, y = node
+            for dx, dy in DIRECTION_VECTORS.values():
+                nxt = (x + dx, y + dy)
+                nx, ny = nxt
+                if not (0 <= nx < w and 0 <= ny < h):
+                    continue
+                if nxt in blocked and nxt != goal:
+                    continue
+                ncost = cost + 1
+                if ncost >= best.get(nxt, 10**9):
+                    continue
+                best[nxt] = ncost
+                came_from[nxt] = node
+                heappush(heap, (ncost + heur(nxt), ncost, nxt))
+        return None
+
+    def astar_distance(
+        self,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        blocked: set[tuple[int, int]] | None = None,
+    ) -> int | None:
+        """Độ dài đường A* ngắn nhất; None nếu thức ăn không tới được."""
+        path = self.astar_path(start, goal, blocked)
+        return None if path is None else len(path) - 1
+
+    def astar_next_action(self) -> int | None:
+        """Hướng bước đầu trên A* — chỉ dùng để đo, không chọn action lúc chơi."""
+        assert self.state is not None
+        path = self.astar_path(self.state.snake[0], self.state.food)
+        if path is None or len(path) < 2:
+            return None
+        nxt = path[1]
+        hx, hy = self.state.snake[0]
+        for candidate, (dx, dy) in DIRECTION_VECTORS.items():
+            if (hx + dx, hy + dy) == nxt:
+                return candidate
+        return None
+
+    def _safety_for_action(self, action: int) -> int:
+        """Safety của action theo observation vừa encode (thẳng / trái / phải)."""
+        direction = self._obs_direction
+        if action == OPPOSITE[direction]:
+            action = direction
+        if action == direction:
+            return int(self._obs_safety[0])
+        if action == LEFT_TURN[direction]:
+            return int(self._obs_safety[1])
+        return int(self._obs_safety[2])
+
+    def _tail_reachable_on(self, snake: list[tuple[int, int]]) -> bool:
+        blocked = (
+            self._cell_mask(snake[1:-1])
+            if len(snake) > 2
+            else bytearray(self.n_cells)
+        )
+        _, ok = self._flood_fill(
+            snake[0], blocked, snake[-1], enough=max(len(snake), 1)
+        )
+        return ok
+
+    def _tail_reachable_now(self) -> bool:
+        """Đầu còn BFS tới đuôi không — dùng cho thưởng giữ hành lang."""
+        assert self.state is not None
+        return self._tail_reachable_on(self.state.snake)
+
+    def _length_bucket(self) -> int:
+        """Mật độ bàn 0–4 (mỗi bậc ~20% ô), không phụ thuộc grid_size hay score tuyệt đối."""
+        assert self.state is not None
+        fill = len(self.state.snake) / float(self.n_cells)
+        return min(4, int(fill * 5))
 
     def _body_without_tail(self) -> list[tuple[int, int]]:
         """Ô thân chặn đầu rắn. Bỏ đuôi vì đuôi sẽ rời đi ở bước tiếp theo."""
@@ -113,11 +248,11 @@ class SnakeEnv(gym.Env):
         return self.state.snake[:-1]
 
     def _cell_mask(self, cells) -> bytearray:
-        """Đánh dấu ô bị chặn trên lưới phẳng (index = y * grid_size + x)."""
-        g = self.grid_size
-        mask = bytearray(g * g)
+        """Đánh dấu ô bị chặn trên lưới phẳng (index = y * width + x)."""
+        w = self.width
+        mask = bytearray(self.n_cells)
         for x, y in cells:
-            mask[y * g + x] = 1
+            mask[y * w + x] = 1
         return mask
 
     def _flood_fill(
@@ -137,12 +272,13 @@ class SnakeEnv(gym.Env):
         Dùng chỉ số phẳng và bytearray thay cho set tuple vì hàm này chạy
         3 lần mỗi bước game (một lần cho mỗi hướng đi).
         """
-        g = self.grid_size
-        last = g - 1
-        start_idx = start[1] * g + start[0]
-        target_idx = target[1] * g + target[0]
+        w, h = self.width, self.height
+        last_x = w - 1
+        last_y = h - 1
+        start_idx = start[1] * w + start[0]
+        target_idx = target[1] * w + target[0]
 
-        visited = bytearray(g * g)
+        visited = bytearray(self.n_cells)
         visited[start_idx] = 1
         queue = [start_idx]
         count = 1
@@ -152,7 +288,7 @@ class SnakeEnv(gym.Env):
         while i < len(queue):
             idx = queue[i]
             i += 1
-            y, x = divmod(idx, g)
+            y, x = divmod(idx, w)
 
             if x > 0:
                 n = idx - 1
@@ -164,7 +300,7 @@ class SnakeEnv(gym.Env):
                     if found_target and count >= enough:
                         return count, True
                     queue.append(n)
-            if x < last:
+            if x < last_x:
                 n = idx + 1
                 if not visited[n] and not blocked[n]:
                     visited[n] = 1
@@ -175,7 +311,7 @@ class SnakeEnv(gym.Env):
                         return count, True
                     queue.append(n)
             if y > 0:
-                n = idx - g
+                n = idx - w
                 if not visited[n] and not blocked[n]:
                     visited[n] = 1
                     count += 1
@@ -184,8 +320,8 @@ class SnakeEnv(gym.Env):
                     if found_target and count >= enough:
                         return count, True
                     queue.append(n)
-            if y < last:
-                n = idx + g
+            if y < last_y:
+                n = idx + w
                 if not visited[n] and not blocked[n]:
                     visited[n] = 1
                     count += 1
@@ -210,14 +346,14 @@ class SnakeEnv(gym.Env):
         mask_after_move = snake[:-2]                — dùng khi rắn không ăn (đuôi rời đi)
         """
         assert self.state is not None
-        g = self.grid_size
+        w, h = self.width, self.height
         hx, hy = self.state.snake[0]
         dx, dy = DIRECTION_VECTORS[direction]
         nx, ny = hx + dx, hy + dy
 
-        if not (0 <= nx < g and 0 <= ny < g):
+        if not (0 <= nx < w and 0 <= ny < h):
             return SAFETY_COLLISION
-        if mask_body[ny * g + nx]:
+        if mask_body[ny * w + nx]:
             return SAFETY_COLLISION
 
         # Ăn thì đuôi ở lại (thân dài thêm), không ăn thì đuôi rời đi.
@@ -228,7 +364,9 @@ class SnakeEnv(gym.Env):
             new_length = len(self.state.snake) + 1
         else:
             blocked = mask_after_move
-            new_snake_tail = self.state.snake[-2] if len(self.state.snake) >= 2 else (nx, ny)
+            new_snake_tail = (
+                self.state.snake[-2] if len(self.state.snake) >= 2 else (nx, ny)
+            )
             new_length = len(self.state.snake)
 
         reachable, tail_reachable = self._flood_fill(
@@ -248,7 +386,7 @@ class SnakeEnv(gym.Env):
         dx, dy = DIRECTION_VECTORS[direction]
         next_x, next_y = head_x + dx, head_y + dy
 
-        if not (0 <= next_x < self.grid_size and 0 <= next_y < self.grid_size):
+        if not self._in_bounds(next_x, next_y):
             return True
         return (next_x, next_y) in self._body_without_tail()
 
@@ -257,8 +395,8 @@ class SnakeEnv(gym.Env):
         occupied = set(self.state.snake)
         empty = [
             (x, y)
-            for x in range(self.grid_size)
-            for y in range(self.grid_size)
+            for x in range(self.width)
+            for y in range(self.height)
             if (x, y) not in occupied
         ]
         if not empty:
@@ -274,12 +412,22 @@ class SnakeEnv(gym.Env):
 
         # Hai mask này dùng chung cho cả 3 hướng nên chỉ dựng một lần mỗi bước.
         mask_body = self._cell_mask(snake[:-1])
-        mask_after_move = self._cell_mask(snake[:-2]) if len(snake) > 2 else bytearray(self.grid_size**2)
+        mask_after_move = (
+            self._cell_mask(snake[:-2])
+            if len(snake) > 2
+            else bytearray(self.n_cells)
+        )
 
         direction = self.state.direction
         safety_straight = self._safety_level(direction, mask_body, mask_after_move)
-        safety_left = self._safety_level(LEFT_TURN[direction], mask_body, mask_after_move)
-        safety_right = self._safety_level(RIGHT_TURN[direction], mask_body, mask_after_move)
+        safety_left = self._safety_level(
+            LEFT_TURN[direction], mask_body, mask_after_move
+        )
+        safety_right = self._safety_level(
+            RIGHT_TURN[direction], mask_body, mask_after_move
+        )
+        self._obs_direction = direction
+        self._obs_safety = (safety_straight, safety_left, safety_right)
 
         return np.array(
             [
@@ -303,11 +451,12 @@ class SnakeEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
-        center = self.grid_size // 2
-        snake = [(center, center), (center - 1, center), (center - 2, center)]
+        cx = max(2, self.width // 2)
+        cy = self.height // 2
+        snake = [(cx, cy), (cx - 1, cy), (cx - 2, cy)]
         self.state = SnakeState(
             snake=snake,
-            food=(center, center + 2),
+            food=(cx, cy + 1 if cy + 1 < self.height else cy - 1),
             direction=RIGHT,
             score=0,
             steps=0,
@@ -324,7 +473,8 @@ class SnakeEnv(gym.Env):
         if action == OPPOSITE[self.state.direction]:
             action = self.state.direction
 
-        old_dist = self._manhattan(self.state.snake[0], self.state.food)
+        chosen_safety = self._safety_for_action(action)
+        best_safety = max(self._obs_safety)
 
         self.state.direction = action
         head_x, head_y = self.state.snake[0]
@@ -333,14 +483,17 @@ class SnakeEnv(gym.Env):
 
         terminated = False
         truncated = False
+        won = False
         reward = self.reward_step
-        death_penalty = self.reward_death - self.death_penalty_per_score * self.state.score
+        extra_death = self.death_penalty_per_score * self.state.score
+        if best_safety > chosen_safety:
+            reward -= self.reward_unsafe * (best_safety - chosen_safety)
 
-        if not (0 <= new_head[0] < self.grid_size and 0 <= new_head[1] < self.grid_size):
-            reward = death_penalty
+        if not self._in_bounds(new_head[0], new_head[1]):
+            reward = self.reward_death - extra_death
             terminated = True
         elif new_head in self._body_without_tail():
-            reward = death_penalty
+            reward = self.reward_self_bite - extra_death
             terminated = True
         else:
             self.state.snake.insert(0, new_head)
@@ -348,17 +501,22 @@ class SnakeEnv(gym.Env):
                 self.state.score += 1
                 self.state.steps_since_food = 0
                 reward = self.reward_food
-                self.state.food = self._spawn_food()
+                if len(self.state.snake) >= self.n_cells:
+                    won = True
+                    terminated = True
+                else:
+                    self.state.food = self._spawn_food()
             else:
                 self.state.snake.pop()
                 self.state.steps_since_food += 1
-
-            new_dist = self._manhattan(self.state.snake[0], self.state.food)
-            reward += self.reward_closer * (old_dist - new_dist)
+                if self._length_bucket() >= 1 and self._tail_reachable_now():
+                    reward += self.reward_keep_tail
 
         self.state.steps += 1
         end_reason = ""
-        if terminated:
+        if won:
+            end_reason = "win"
+        elif terminated:
             end_reason = "death"
         elif self.state.steps >= self.max_steps:
             truncated = True
@@ -384,16 +542,16 @@ class SnakeEnv(gym.Env):
         if self.state is None:
             return None
 
-        grid = [["." for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+        grid = [["." for _ in range(self.width)] for _ in range(self.height)]
         fx, fy = self.state.food
         grid[fy][fx] = "F"
 
         for i, (x, y) in enumerate(self.state.snake):
             grid[y][x] = "H" if i == 0 else "s"
 
-        lines = ["+" + "-" * self.grid_size + "+"]
+        lines = ["+" + "-" * self.width + "+"]
         for row in grid:
             lines.append("|" + "".join(row) + "|")
-        lines.append("+" + "-" * self.grid_size + "+")
+        lines.append("+" + "-" * self.width + "+")
         lines.append(f"score={self.state.score} steps={self.state.steps}")
         return "\n".join(lines)

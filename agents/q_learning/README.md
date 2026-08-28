@@ -14,7 +14,7 @@ agents/q_learning/
 
 ## Output model
 
-Lưu vào `output/q_learning/training/`:
+Lưu vào `output/q_learning/YYYY-MM-DD_HH-MM-SS/` (mỗi lần train một folder):
 
 - `agent.pkl` — model dùng cho game
 - `agent_best.pkl` — checkpoint eval tốt nhất
