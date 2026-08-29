@@ -9,17 +9,18 @@ Chạy:
 from __future__ import annotations
 
 import argparse
-import warnings
-from pathlib import Path
 
 import numpy as np
 
-from agents.registry import get_agent_spec, load_agent
-from common.env_hyperparameters import SnakeEnvHyperparameters
+from agents.registry import get_agent_spec
+from common.env_hyperparameters import (
+    PLAY_GRID_CHOICES,
+    SnakeEnvHyperparameters,
+    parse_play_grid,
+)
 from common.game_window import GameWindow
+from common.run_store import ModelRun, list_model_runs
 from common.snake_env import SnakeEnv
-
-PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,35 +32,31 @@ def parse_args() -> argparse.Namespace:
         choices=["sarsa", "q_learning"],
         help="Thuật toán RL (mặc định: sarsa)",
     )
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Cố định seed để chơi lại cùng ván. Mặc định: mỗi ván một seed ngẫu nhiên.",
+    )
+    parser.add_argument(
+        "--grid",
+        type=str,
+        default=None,
+        choices=list(PLAY_GRID_CHOICES),
+        help="Bỏ menu, vào thẳng màn 10x10, 15x20 hoặc 30x30",
+    )
+    parser.add_argument(
+        "--random",
+        action="store_true",
+        help="Chơi random, không load model (menu mặc định cũng không tick)",
+    )
     return parser.parse_args()
 
 
-def build_env(seed: int, env_cfg: SnakeEnvHyperparameters | None = None) -> SnakeEnv:
+def build_env(seed: int | None, env_cfg: SnakeEnvHyperparameters | None = None) -> SnakeEnv:
     cfg = env_cfg or SnakeEnvHyperparameters()
     rng = np.random.default_rng(seed)
-    return SnakeEnv(
-        grid_size=cfg.grid_size,
-        max_steps=cfg.max_steps,
-        max_steps_without_food=cfg.max_steps_without_food,
-        reward_food=cfg.reward_food,
-        reward_death=cfg.reward_death,
-        reward_step=cfg.reward_step,
-        reward_closer=cfg.reward_closer,
-        death_penalty_per_score=cfg.death_penalty_per_score,
-        rng=rng,
-    )
-
-
-def warn_missing_model(spec) -> None:
-    paths = [spec.output_dir / "agent.pkl", spec.output_dir / "agent_best.pkl"]
-    msg = (
-        f"Chưa tìm thấy model {spec.label} tại:\n"
-        + "\n".join(f"  - {p}" for p in paths)
-        + f"\nChạy `{spec.train_command}` để train trước. Game sẽ dùng random policy."
-    )
-    warnings.warn(msg, UserWarning, stacklevel=2)
-    print(f"WARNING: Model not found. Run `{spec.train_command}` first. Using random policy.")
+    return cfg.create_env(rng)
 
 
 def main() -> None:
@@ -77,23 +74,39 @@ def main() -> None:
     else:
         env_cfg = SnakeEnvHyperparameters()
 
-    env = build_env(args.seed, env_cfg)
-    agent, spec, model_missing = load_agent(args.agent)
+    env = build_env(args.seed, env_cfg.for_shape(env_cfg.width, env_cfg.height))
+    model_hint = f"output/{args.agent}/YYYY-MM-DD_HH-MM-SS/agent.pkl"
 
-    if model_missing:
-        warn_missing_model(spec)
+    def make_env(width: int, height: int) -> SnakeEnv:
+        return build_env(args.seed, env_cfg.for_shape(width, height))
 
-    model_hint = str((spec.output_dir / "agent.pkl").relative_to(PROJECT_ROOT))
+    def list_runs() -> list[ModelRun]:
+        return list_model_runs(args.agent)
+
+    def load_run(run: ModelRun):
+        print(f"Loaded model: {run.model_path}")
+        agent = spec.load_fn(run.model_path)
+        return agent
 
     window = GameWindow(
         env=env,
-        agent=agent,
+        agent=None,
         title=f"{spec.label} Snake",
         agent_label=spec.label,
-        model_missing=model_missing,
+        model_missing=False,
         model_path_hint=model_hint,
         train_command_hint=spec.train_command,
+        make_env=make_env,
+        replay_seed=args.seed,
+        list_runs_fn=list_runs,
+        load_run_fn=load_run,
+        use_agent=False,
     )
+    if args.grid is not None:
+        width, height = parse_play_grid(args.grid)
+        if not args.random:
+            window.set_use_agent(True)
+        window.apply_level(width, height)
     window.run()
 
 

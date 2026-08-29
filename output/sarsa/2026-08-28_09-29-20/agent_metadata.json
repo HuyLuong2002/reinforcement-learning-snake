@@ -1,0 +1,66 @@
+{
+  "q_mean": -0.49302149309231535,
+  "q_std": 7.508554552840308,
+  "q_max": 36.727327285084236,
+  "q_min": -96.33698464585552,
+  "nonzero_states": 2134,
+  "agent": "sarsa",
+  "grid": "15x20",
+  "grid_width": 15,
+  "grid_height": 20,
+  "n_cells": 300,
+  "max_score": 297,
+  "max_steps": 6000,
+  "max_steps_without_food": 200,
+  "n_state_dims": [
+    3,
+    3,
+    4,
+    4,
+    4,
+    4,
+    5
+  ],
+  "n_actions": 4,
+  "seed": 42,
+  "episodes": 30000,
+  "best_eval_score": 53.88,
+  "best_episode": 29000,
+  "final_episode": 30000,
+  "best_checkpoint": "agent_best.pkl",
+  "final_checkpoint": "agent.pkl",
+  "last_checkpoint": "agent_last.pkl",
+  "hyperparameters": {
+    "env": {
+      "grid_size": 0,
+      "width": 15,
+      "height": 20,
+      "max_steps": 6000,
+      "max_steps_without_food": 200,
+      "reward_food": 10.0,
+      "reward_death": -40.0,
+      "reward_self_bite": -55.0,
+      "reward_step": -0.05,
+      "reward_keep_tail": 0.08,
+      "reward_unsafe": 0.8,
+      "death_penalty_per_score": 1.0
+    },
+    "sarsa": {
+      "alpha": 0.1,
+      "gamma": 0.99,
+      "epsilon_start": 1.0,
+      "epsilon_min": 0.01,
+      "epsilon_decay": 0.9998
+    },
+    "training": {
+      "episodes": 30000,
+      "seed": 42,
+      "log_every": 100,
+      "eval_every": 1000,
+      "eval_episodes": 100,
+      "save_best_checkpoint": true,
+      "export_best_as_final": true,
+      "output_dir": null
+    }
+  }
+}

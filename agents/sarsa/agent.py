@@ -6,7 +6,7 @@ SARSA (on-policy):
 Khác Q-learning (off-policy) ở chỗ dùng a' thực sự sẽ chọn (epsilon-greedy),
 không dùng max_a' Q(s',a').
 
-Khi chơi game: greedy_policy_action() — luôn chọn argmax Q, không explore.
+Khi chơi / eval: greedy argmax Q (cấm 180°). Không heuristic, không A* chọn hộ.
 """
 
 from __future__ import annotations
@@ -60,16 +60,28 @@ class SarsaAgent:
         action = int(np.clip(action, 0, self.n_actions - 1))
         return float(self.q_table[state_key][action])
 
-    def choose_action(self, state: np.ndarray | Sequence[int], greedy: bool = False) -> int:
+    def choose_action(
+        self,
+        state: np.ndarray | Sequence[int],
+        greedy: bool = False,
+        forbidden: int | None = None,
+    ) -> int:
         """
         Chọn action:
           - greedy=False (train): epsilon-greedy — random với xác suất epsilon
           - greedy=True  (eval/play): luôn chọn action có Q cao nhất
+          - forbidden: không chọn (thường là 180° — env cũng biến thành đi thẳng)
         """
         state_key = self._as_state(state)
+        q = self.q_table[state_key]
+        legal = (
+            [a for a in range(self.n_actions) if a != forbidden]
+            if forbidden is not None
+            else list(range(self.n_actions))
+        )
         if not greedy and self.rng.random() < self.epsilon:
-            return int(self.rng.integers(0, self.n_actions))
-        return int(np.argmax(self.q_table[state_key]))
+            return int(legal[int(self.rng.integers(0, len(legal)))])
+        return int(max(legal, key=lambda a: q[a]))
 
     def update(
         self,
@@ -103,9 +115,13 @@ class SarsaAgent:
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         return self.epsilon
 
-    def greedy_policy_action(self, state: np.ndarray | Sequence[int]) -> int:
+    def greedy_policy_action(
+        self,
+        state: np.ndarray | Sequence[int],
+        forbidden: int | None = None,
+    ) -> int:
         """Policy khi chơi game / eval — không explore."""
-        return self.choose_action(state, greedy=True)
+        return self.choose_action(state, greedy=True, forbidden=forbidden)
 
     def save(self, path: Path) -> None:
         """Lưu Q-table + hyperparameters ra file .pkl."""
