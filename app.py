@@ -70,6 +70,10 @@ def main() -> None:
         from agents.sarsa.hyperparameters import DEFAULT_HYPERPARAMETERS
 
         env_cfg = DEFAULT_HYPERPARAMETERS.env
+    elif args.agent == "q_learning":
+        from agents.q_learning.hyperparameters import DEFAULT_HYPERPARAMETERS
+
+        env_cfg = DEFAULT_HYPERPARAMETERS.env
     else:
         env_cfg = SnakeEnvHyperparameters()
 

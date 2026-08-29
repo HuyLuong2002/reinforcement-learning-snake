@@ -1,6 +1,6 @@
-# SARSA Snake
+# SARSA / Q-Learning Snake
 
-Đồ án RL: huấn luyện agent tabular SARSA chơi Snake trên lưới. Cấu trúc mở rộng để bạn thêm Q-learning sau.
+Đồ án RL: huấn luyện agent tabular SARSA và Q-learning chơi Snake trên lưới.
 
 ## Cấu trúc
 
@@ -17,12 +17,15 @@
 │   │   ├── hyperparameters.py
 │   │   ├── train.py
 │   │   └── analyze_games.py
-│   └── q_learning/            # Bạn thêm code Q-learning vào đây
-│       └── README.md
+│   └── q_learning/            # Q-learning
+│       ├── agent.py
+│       ├── hyperparameters.py
+│       ├── train.py
+│       └── analyze_games.py
 ├── app.py                     # Mở game (--agent sarsa|q_learning)
 └── output/
     ├── sarsa/training/        # Model SARSA
-    └── q_learning/training/   # Model Q-learning (sau này)
+    └── q_learning/training/   # Model Q-learning
 ```
 
 ## Chạy
@@ -33,12 +36,17 @@ pip install -r requirements.txt
 # Train SARSA (chỉnh episodes trong agents/sarsa/hyperparameters.py)
 python -m agents.sarsa.train
 
+# Train Q-learning
+python -m agents.q_learning.train
+
 # Chơi game
 python app.py
 python app.py --agent sarsa
+python app.py --agent q_learning
 
 # Phân tích ván chơi
 python -m agents.sarsa.analyze_games --games 10
+python -m agents.q_learning.analyze_games --games 10
 ```
 
 > Dùng `pygame-ce` thay cho `pygame` (Python 3.14). Import vẫn là `import pygame`.
@@ -67,13 +75,15 @@ nên vẫn có ý nghĩa cả khi rắn đã rất dài.
 
 **Lưu ý:** Model train bằng state cũ **không tương thích** — phải train lại.
 
-## Checkpoint model (SARSA)
+## Checkpoint model
 
-| File                                   | Mô tả                        |
-| -------------------------------------- | ---------------------------- |
-| `output/sarsa/training/agent_best.pkl` | Checkpoint eval tốt nhất     |
-| `output/sarsa/training/agent.pkl`      | Model dùng cho game (= best) |
-| `output/sarsa/training/agent_last.pkl` | Episode cuối                 |
+Cùng tên file, khác thư mục (`output/sarsa/training/` hoặc `output/q_learning/training/`):
+
+| File           | Mô tả                        |
+| -------------- | ---------------------------- |
+| `agent_best.pkl` | Checkpoint eval tốt nhất     |
+| `agent.pkl`      | Model dùng cho game (= best) |
+| `agent_last.pkl` | Episode cuối                 |
 
 ## Kết thúc một ván
 
@@ -83,10 +93,6 @@ nên vẫn có ý nghĩa cả khi rắn đã rất dài.
 | `max_steps` | Hết trần bước (`max_steps`, mặc định 2000) |
 | `no_food` | Đi `max_steps_without_food` bước liên tiếp mà không ăn được gì |
 
-## Thêm Q-learning
+## Q-learning vs SARSA
 
-Bạn thêm code vào `agents/q_learning/` theo `agents/q_learning/README.md`, lưu model vào `output/q_learning/training/`, rồi chạy:
-
-```bash
-python app.py --agent q_learning
-```
+Q-learning (off-policy) cập nhật bằng `max_a' Q(s', a')`. SARSA (on-policy) dùng `Q(s', a')` với action epsilon-greedy thật sự sẽ chọn. Hyperparameter mặc định giống nhau để so sánh công bằng. Xem `agents/q_learning/README.md`.
