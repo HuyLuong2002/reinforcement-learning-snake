@@ -4,6 +4,7 @@ Chạy:
   python app.py
   python app.py --agent sarsa
   python app.py --agent q_learning
+Trong menu: chọn SARSA hoặc Q-Learning, tick Load model, chọn lần train, chọn màn.
 """
 
 from __future__ import annotations
@@ -12,13 +13,13 @@ import argparse
 
 import numpy as np
 
-from agents.registry import get_agent_spec
+from agents.registry import AGENT_REGISTRY, get_agent_spec
 from common.env_hyperparameters import (
     PLAY_GRID_CHOICES,
     SnakeEnvHyperparameters,
     parse_play_grid,
 )
-from common.game_window import GameWindow
+from common.game_window import AgentMenuItem, GameWindow
 from common.run_store import ModelRun, list_model_runs
 from common.snake_env import SnakeEnv
 
@@ -76,17 +77,21 @@ def main() -> None:
 
     env = build_env(args.seed, env_cfg.for_shape(env_cfg.width, env_cfg.height))
     model_hint = f"output/{args.agent}/YYYY-MM-DD_HH-MM-SS/agent.pkl"
+    available_agents = [
+        AgentMenuItem(item.name, item.label, item.train_command)
+        for item in AGENT_REGISTRY.values()
+    ]
 
     def make_env(width: int, height: int) -> SnakeEnv:
         return build_env(args.seed, env_cfg.for_shape(width, height))
 
-    def list_runs() -> list[ModelRun]:
-        return list_model_runs(args.agent)
+    def list_runs(agent_name: str) -> list[ModelRun]:
+        return list_model_runs(agent_name)
 
-    def load_run(run: ModelRun):
-        print(f"Loaded model: {run.model_path}")
-        agent = spec.load_fn(run.model_path)
-        return agent
+    def load_run(agent_name: str, run: ModelRun):
+        agent_spec = get_agent_spec(agent_name)
+        print(f"Loaded {agent_spec.label}: {run.model_path}")
+        return agent_spec.load_fn(run.model_path)
 
     window = GameWindow(
         env=env,
@@ -101,6 +106,8 @@ def main() -> None:
         list_runs_fn=list_runs,
         load_run_fn=load_run,
         use_agent=False,
+        agent_name=args.agent,
+        available_agents=available_agents,
     )
     if args.grid is not None:
         width, height = parse_play_grid(args.grid)

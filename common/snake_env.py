@@ -3,6 +3,9 @@
 State tabular 7 chiều:
   [food_dx, food_dy, safety_straight, safety_left, safety_right, direction, fill_bucket]
 
+Action: Discrete(3) tương đối theo hướng hiện tại:
+  0 = đi thẳng, 1 = rẽ trái, 2 = rẽ phải. Không có lùi 180°.
+
 fill_bucket = mật độ bàn 0–4 (~20% ô/bậc), chung cho 10×10, 15×20 và 30×30.
 
 Điểm mấu chốt là 3 chiều `safety`: với mỗi hướng đi (thẳng / trái / phải), env chạy
@@ -35,6 +38,28 @@ DIRECTION_VECTORS: dict[int, tuple[int, int]] = {
 LEFT_TURN = {UP: LEFT, RIGHT: UP, DOWN: RIGHT, LEFT: DOWN}
 RIGHT_TURN = {UP: RIGHT, RIGHT: DOWN, DOWN: LEFT, LEFT: UP}
 OPPOSITE = {UP: DOWN, RIGHT: LEFT, DOWN: UP, LEFT: RIGHT}
+
+# Action tương đối — agent chỉ chọn 3 hướng hợp lệ, không lùi 180°.
+REL_STRAIGHT = 0
+REL_LEFT = 1
+REL_RIGHT = 2
+N_RELATIVE_ACTIONS = 3
+RELATIVE_ACTION_NAMES = {
+    REL_STRAIGHT: "straight",
+    REL_LEFT: "left",
+    REL_RIGHT: "right",
+}
+
+
+def relative_to_absolute(direction: int, relative: int) -> int:
+    """Đổi action tương đối (thẳng/trái/phải) thành hướng tuyệt đối trên bàn."""
+    if relative == REL_STRAIGHT:
+        return direction
+    if relative == REL_LEFT:
+        return LEFT_TURN[direction]
+    if relative == REL_RIGHT:
+        return RIGHT_TURN[direction]
+    raise ValueError(f"action tương đối không hợp lệ: {relative}")
 
 INITIAL_SNAKE_LENGTH = 3
 
@@ -91,10 +116,9 @@ class SnakeEnv(gym.Env):
         self.reward_unsafe = reward_unsafe
         self.death_penalty_per_score = death_penalty_per_score
         self.rng = rng or np.random.default_rng()
-        self._obs_direction = RIGHT
         self._obs_safety = (SAFETY_OPEN, SAFETY_OPEN, SAFETY_OPEN)
 
-        self.action_space = spaces.Discrete(4)
+        self.action_space = spaces.Discrete(N_RELATIVE_ACTIONS)
         self.observation_space = spaces.MultiDiscrete([3, 3, 4, 4, 4, 4, 5])
 
         self.state: SnakeState | None = None
@@ -208,15 +232,8 @@ class SnakeEnv(gym.Env):
         return None
 
     def _safety_for_action(self, action: int) -> int:
-        """Safety của action theo observation vừa encode (thẳng / trái / phải)."""
-        direction = self._obs_direction
-        if action == OPPOSITE[direction]:
-            action = direction
-        if action == direction:
-            return int(self._obs_safety[0])
-        if action == LEFT_TURN[direction]:
-            return int(self._obs_safety[1])
-        return int(self._obs_safety[2])
+        """Safety của action tương đối: 0 thẳng / 1 trái / 2 phải."""
+        return int(self._obs_safety[int(action)])
 
     def _tail_reachable_on(self, snake: list[tuple[int, int]]) -> bool:
         blocked = (
@@ -426,7 +443,6 @@ class SnakeEnv(gym.Env):
         safety_right = self._safety_level(
             RIGHT_TURN[direction], mask_body, mask_after_move
         )
-        self._obs_direction = direction
         self._obs_safety = (safety_straight, safety_left, safety_right)
 
         return np.array(
@@ -469,16 +485,15 @@ class SnakeEnv(gym.Env):
         if self.state is None:
             raise RuntimeError("Call reset() before step().")
 
-        action = int(action)
-        if action == OPPOSITE[self.state.direction]:
-            action = self.state.direction
+        action = int(np.clip(int(action), REL_STRAIGHT, REL_RIGHT))
+        heading = relative_to_absolute(self.state.direction, action)
 
         chosen_safety = self._safety_for_action(action)
         best_safety = max(self._obs_safety)
 
-        self.state.direction = action
+        self.state.direction = heading
         head_x, head_y = self.state.snake[0]
-        dx, dy = DIRECTION_VECTORS[action]
+        dx, dy = DIRECTION_VECTORS[heading]
         new_head = (head_x + dx, head_y + dy)
 
         terminated = False

@@ -1,7 +1,7 @@
 """Chọn action khi train / eval / chơi — luôn từ policy agent (Q-table).
 
-Không ghi đè bằng A* hay heuristic. 180° bị cấm vì env cũng biến thành đi thẳng,
-nên agent chỉ học 3 hướng thật sự thực hiện được.
+Không gian hành động là 3 hướng tương đối (thẳng / trái / phải).
+Không ghi đè bằng A* hay heuristic.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from typing import Protocol
 
 import numpy as np
 
-from common.snake_env import OPPOSITE, SnakeEnv
+from common.snake_env import SnakeEnv
 
 
 class ActionAgent(Protocol):
@@ -29,7 +29,5 @@ def select_action(
     *,
     greedy: bool = False,
 ) -> int:
-    """ε-greedy / greedy Q. Cấm 180° — cùng luật lúc train và lúc chơi."""
-    assert env.state is not None
-    forbidden = OPPOSITE[env.state.direction]
-    return agent.choose_action(obs, greedy=greedy, forbidden=forbidden)
+    """ε-greedy / greedy Q trên 3 hướng hợp lệ."""
+    return agent.choose_action(obs, greedy=greedy)

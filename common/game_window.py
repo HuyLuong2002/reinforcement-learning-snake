@@ -44,6 +44,8 @@ COLOR_DROPDOWN_BG = (32, 36, 52)
 COLOR_DROPDOWN_SEL = (60, 120, 200)
 DROPDOWN_VISIBLE = 6
 SELECT_H = 40
+ALGO_BTN_H = 40
+ALGO_BTN_GAP = 10
 
 
 class PlayableAgent(Protocol):
@@ -70,6 +72,13 @@ class GameUIState:
     steps: int = 0
     last_reward: float = 0.0
     end_reason: str = ""
+
+
+@dataclass(frozen=True)
+class AgentMenuItem:
+    name: str
+    label: str
+    train_command: str
 
 
 def cell_size_for_board(
@@ -108,9 +117,11 @@ class GameWindow:
         train_command_hint: str = "python -m agents.sarsa.train",
         make_env: Callable[[int, int], SnakeEnv] | None = None,
         replay_seed: int | None = None,
-        list_runs_fn: Callable[[], list[ModelRun]] | None = None,
-        load_run_fn: Callable[[ModelRun], PlayableAgent | None] | None = None,
+        list_runs_fn: Callable[[str], list[ModelRun]] | None = None,
+        load_run_fn: Callable[[str, ModelRun], PlayableAgent | None] | None = None,
         use_agent: bool = False,
+        agent_name: str = "sarsa",
+        available_agents: list[AgentMenuItem] | None = None,
     ) -> None:
         self.env = env
         self.make_env = make_env
@@ -125,13 +136,23 @@ class GameWindow:
         self.dropdown_open = False
         self.dropdown_scroll = 0
         self.use_agent = use_agent
-        self.agent_label = agent_label
+        self.available_agents = available_agents or [
+            AgentMenuItem("sarsa", "SARSA", "python -m agents.sarsa.train"),
+            AgentMenuItem(
+                "q_learning", "Q-Learning", "python -m agents.q_learning.train"
+            ),
+        ]
+        self.agent_name = agent_name
+        selected = self._agent_item(agent_name) or self.available_agents[0]
+        self.agent_name = selected.name
+        self.agent_label = selected.label or agent_label
         self.model_missing = model_missing
         self.model_path_hint = model_path_hint
-        self.train_command_hint = train_command_hint
+        self.train_command_hint = selected.train_command or train_command_hint
         self.ui = GameUIState()
         self.obs: np.ndarray | None = None
         self.level_btns: dict[tuple[int, int], pygame.Rect] = {}
+        self.algo_btns: dict[str, pygame.Rect] = {}
         self.use_agent_hit = pygame.Rect(0, 0, 300, 40)
         self.run_select_hit = pygame.Rect(0, 0, 300, SELECT_H)
         self._dropdown_panel = pygame.Rect(0, 0, 0, 0)
@@ -161,11 +182,45 @@ class GameWindow:
     def using_trained_agent(self) -> bool:
         return self.use_agent and self.agent is not None
 
+    def _agent_item(self, name: str) -> AgentMenuItem | None:
+        for item in self.available_agents:
+            if item.name == name:
+                return item
+        return None
+
+    def _agent_at_pos(self, pos: tuple[int, int]) -> str | None:
+        for name, rect in self.algo_btns.items():
+            if rect.collidepoint(pos):
+                return name
+        return None
+
+    def set_agent_kind(self, name: str) -> None:
+        item = self._agent_item(name)
+        if item is None:
+            return
+        changed = name != self.agent_name
+        self.agent_name = item.name
+        self.agent_label = item.label
+        self.train_command_hint = item.train_command
+        self.model_path_hint = f"output/{item.name}/YYYY-MM-DD_HH-MM-SS/agent.pkl"
+        pygame.display.set_caption(f"{item.label} Snake")
+        if changed:
+            self.selected_run_i = 0
+            self.dropdown_open = False
+            self.dropdown_scroll = 0
+        if self.use_agent:
+            self._ensure_model_loaded()
+            self._resize_window()
+        else:
+            self.agent = None
+            self.model_missing = False
+            self._refresh_runs()
+
     def _refresh_runs(self) -> None:
         if self.list_runs_fn is None:
             self.model_runs = []
             return
-        self.model_runs = self.list_runs_fn()
+        self.model_runs = self.list_runs_fn(self.agent_name)
         if self.selected_run_i >= len(self.model_runs):
             self.selected_run_i = 0
         max_scroll = max(0, len(self.model_runs) - DROPDOWN_VISIBLE)
@@ -177,7 +232,11 @@ class GameWindow:
             self.model_missing = True
             return
         run = self.model_runs[self.selected_run_i]
-        self.agent = self.load_run_fn(run)
+        try:
+            self.agent = self.load_run_fn(self.agent_name, run)
+        except Exception as exc:
+            print(f"Khong load duoc model {run.model_path}: {exc}")
+            self.agent = None
         self.model_missing = self.agent is None
         self.model_path_hint = str(run.model_path)
 
@@ -231,15 +290,38 @@ class GameWindow:
         ox, oy = self.board_origin
         board_h = self.env.height * self.cell_size
         n_levels = len(PLAYABLE_LEVELS)
+        n_algos = max(1, len(self.available_agents))
+        algo_block = ALGO_BTN_H + 10
         select_block = (SELECT_H + 10) if self.use_agent else 0
-        stack_h = chk_h + 16 + select_block + n_levels * btn_h + max(0, n_levels - 1) * 12
+        stack_h = (
+            chk_h
+            + 16
+            + algo_block
+            + select_block
+            + n_levels * btn_h
+            + max(0, n_levels - 1) * 12
+        )
         menu_y = oy + max(80, (board_h - stack_h) // 2)
         self.use_agent_hit = pygame.Rect(cx - btn_w // 2, menu_y, btn_w, chk_h)
+        self.algo_btns = {}
+        algo_y = menu_y + chk_h + 10
+        total_gap = ALGO_BTN_GAP * (n_algos - 1)
+        each_w = (btn_w - total_gap) // n_algos
+        for i, item in enumerate(self.available_agents):
+            self.algo_btns[item.name] = pygame.Rect(
+                cx - btn_w // 2 + i * (each_w + ALGO_BTN_GAP),
+                algo_y,
+                each_w,
+                ALGO_BTN_H,
+            )
         self.run_select_hit = pygame.Rect(
-            cx - btn_w // 2, menu_y + chk_h + 10, btn_w, SELECT_H
+            cx - btn_w // 2,
+            menu_y + chk_h + 10 + algo_block,
+            btn_w,
+            SELECT_H,
         )
         self.level_btns = {}
-        levels_y = menu_y + chk_h + 16 + select_block
+        levels_y = menu_y + chk_h + 16 + algo_block + select_block
         for i, shape in enumerate(PLAYABLE_LEVELS):
             self.level_btns[shape] = pygame.Rect(
                 cx - btn_w // 2,
@@ -379,7 +461,10 @@ class GameWindow:
             f"Score: {self.ui.score}/{max_sc}  |  Steps: {self.ui.steps}/{self.env.max_steps}  "
             f"|  {status}"
         )
-        line2 = f"Menu: bam {shortcuts}  |  A = load model  |  chon lan train  |  Esc thoat"
+        line2 = (
+            f"Menu: bam {shortcuts}  |  A = load model  |  "
+            f"S/Q = SARSA/Q-Learning  |  Esc thoat"
+        )
         if self.ui.phase == GamePhase.PLAYING:
             line2 = f"Agent: {agent_label}  |  Esc thoat"
         if self.ui.phase == GamePhase.GAME_OVER:
@@ -417,9 +502,26 @@ class GameWindow:
         if self.use_agent:
             inner = box.inflate(-8, -8)
             pygame.draw.rect(self.screen, COLOR_CHECK_ON, inner, border_radius=2)
-        label = f"Load model {self.agent_label}"
+        label = "Load model da train"
         text = self.font_md.render(label, True, COLOR_BTN_TEXT)
         self.screen.blit(text, (box.right + 12, hit.y + (hit.h - text.get_height()) // 2))
+
+    def draw_algo_select(self, mouse_pos: tuple[int, int]) -> None:
+        for item in self.available_agents:
+            rect = self.algo_btns.get(item.name)
+            if rect is None:
+                continue
+            selected = item.name == self.agent_name
+            hovered = rect.collidepoint(mouse_pos)
+            if selected:
+                color = COLOR_CHECK_ON
+            elif hovered:
+                color = COLOR_BTN_HOVER
+            else:
+                color = COLOR_BTN
+            pygame.draw.rect(self.screen, color, rect, border_radius=8)
+            text = self.font_md.render(item.label, True, COLOR_BTN_TEXT)
+            self.screen.blit(text, text.get_rect(center=rect.center))
 
     def draw_run_select(self, mouse_pos: tuple[int, int]) -> None:
         if not self.use_agent:
@@ -487,6 +589,7 @@ class GameWindow:
 
         if self.ui.phase == GamePhase.MENU:
             self.draw_agent_checkbox(mouse_pos)
+            self.draw_algo_select(mouse_pos)
             self.draw_run_select(mouse_pos)
             for (w, h), rect in self.level_btns.items():
                 win_score = SnakeEnv.max_score(w, h)
@@ -539,6 +642,26 @@ class GameWindow:
         self.ui.steps = 0
         self.ui.end_reason = ""
 
+    def _handle_menu_click(self, pos: tuple[int, int]) -> None:
+        if self.use_agent_hit.collidepoint(pos):
+            self.toggle_use_agent()
+            return
+        algo = self._agent_at_pos(pos)
+        if algo is not None:
+            self.set_agent_kind(algo)
+            return
+        if self.use_agent and self.run_select_hit.collidepoint(pos):
+            self._refresh_runs()
+            self.dropdown_open = True
+            self.dropdown_scroll = max(
+                0, self.selected_run_i - DROPDOWN_VISIBLE + 1
+            )
+            return
+        for (w, h), rect in self.level_btns.items():
+            if rect.collidepoint(pos):
+                self.apply_level(w, h)
+                return
+
     def handle_events(self) -> bool:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -561,6 +684,10 @@ class GameWindow:
                 if self.ui.phase == GamePhase.MENU:
                     if event.key == pygame.K_a:
                         self.toggle_use_agent()
+                    elif event.key == pygame.K_s:
+                        self.set_agent_kind("sarsa")
+                    elif event.key == pygame.K_q:
+                        self.set_agent_kind("q_learning")
                     elif self.use_agent and event.key in (
                         pygame.K_LEFT,
                         pygame.K_RIGHT,
@@ -595,28 +722,10 @@ class GameWindow:
                                 break
                         if not picked:
                             self.dropdown_open = False
-                            if self.run_select_hit.collidepoint(event.pos):
-                                pass
-                            elif self.use_agent_hit.collidepoint(event.pos):
-                                self.toggle_use_agent()
-                            elif not self._dropdown_panel.collidepoint(event.pos):
-                                for (w, h), rect in self.level_btns.items():
-                                    if rect.collidepoint(event.pos):
-                                        self.apply_level(w, h)
-                                        break
-                    elif self.use_agent_hit.collidepoint(event.pos):
-                        self.toggle_use_agent()
-                    elif self.use_agent and self.run_select_hit.collidepoint(event.pos):
-                        self._refresh_runs()
-                        self.dropdown_open = True
-                        self.dropdown_scroll = max(
-                            0, self.selected_run_i - DROPDOWN_VISIBLE + 1
-                        )
+                            if not self.run_select_hit.collidepoint(event.pos):
+                                self._handle_menu_click(event.pos)
                     else:
-                        for (w, h), rect in self.level_btns.items():
-                            if rect.collidepoint(event.pos):
-                                self.apply_level(w, h)
-                                break
+                        self._handle_menu_click(event.pos)
                 elif self.ui.phase == GamePhase.GAME_OVER:
                     if self.start_btn.collidepoint(event.pos):
                         self.start_or_restart()

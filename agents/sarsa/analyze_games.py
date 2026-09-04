@@ -24,17 +24,15 @@ from common.policy import select_action
 from common.run_store import latest_model_path
 from common.snake_env import (
     DIRECTION_VECTORS,
-    LEFT_TURN,
-    OPPOSITE,
-    RIGHT_TURN,
+    N_RELATIVE_ACTIONS,
     SAFETY_COLLISION,
     SAFETY_OPEN,
     SAFETY_TIGHT,
     SAFETY_TRAP,
     SnakeEnv,
+    relative_to_absolute,
 )
 
-ACTION_NAMES = {0: "UP", 1: "RIGHT", 2: "DOWN", 3: "LEFT"}
 SAFETY_NAMES = {0: "collision", 1: "trap", 2: "tight", 3: "open"}
 
 
@@ -44,32 +42,16 @@ def build_env(seed: int, width: int, height: int) -> SnakeEnv:
     return cfg.create_env(np.random.default_rng(seed))
 
 
-def _effective_action(direction: int, action: int) -> int:
-    if action == OPPOSITE[direction]:
-        return direction
-    return action
+def _to_heading(direction: int, action: int) -> int:
+    return relative_to_absolute(direction, action)
 
 
-def _rel_name(direction: int, action: int) -> str:
-    action = _effective_action(direction, action)
-    if action == direction:
-        return "straight"
-    if action == LEFT_TURN[direction]:
-        return "left"
-    return "right"
+def _safety_of(obs: np.ndarray, action: int) -> int:
+    return int(obs[2 + int(action)])
 
 
-def _safety_of(obs: np.ndarray, direction: int, action: int) -> int:
-    action = _effective_action(direction, action)
-    if action == direction:
-        return int(obs[2])
-    if action == LEFT_TURN[direction]:
-        return int(obs[3])
-    return int(obs[4])
-
-
-def _next_cell(head: tuple[int, int], action: int) -> tuple[int, int]:
-    dx, dy = DIRECTION_VECTORS[action]
+def _next_cell(head: tuple[int, int], heading: int) -> tuple[int, int]:
+    dx, dy = DIRECTION_VECTORS[heading]
     return head[0] + dx, head[1] + dy
 
 
@@ -93,12 +75,11 @@ def run_episode(agent: SarsaAgent, seed: int, width: int, height: int) -> dict:
     detours_short = 0
     on_astar_short = 0
     unseen_state_steps = 0
-    reverse_picks = 0
 
     last_safety = 3
     last_best_safety = 3
-    last_q = [0.0, 0.0, 0.0, 0.0]
-    last_action = 1
+    last_q = [0.0, 0.0, 0.0]
+    last_action = 0
     last_fill = 0
     last_was_unseen = False
 
@@ -109,14 +90,13 @@ def run_episode(agent: SarsaAgent, seed: int, width: int, height: int) -> dict:
         fill = env._length_bucket()
         suggested = env.astar_next_action()
         action = select_action(env, agent, obs, greedy=True)
-        q_vals = [agent.get_q(obs, a) for a in range(4)]
+        heading = _to_heading(direction, action)
+        q_vals = [agent.get_q(obs, a) for a in range(N_RELATIVE_ACTIONS)]
         unseen = all(q == 0.0 for q in q_vals)
         if unseen:
             unseen_state_steps += 1
-        if action == OPPOSITE[direction]:
-            reverse_picks += 1
 
-        chosen_safety = _safety_of(obs, direction, action)
+        chosen_safety = _safety_of(obs, action)
         best_safety = max(int(obs[2]), int(obs[3]), int(obs[4]))
         if best_safety == SAFETY_OPEN and chosen_safety == SAFETY_COLLISION:
             chose_collision_when_open += 1
@@ -137,7 +117,7 @@ def run_episode(agent: SarsaAgent, seed: int, width: int, height: int) -> dict:
         ate = info["score"] > len(food_legs) and info["end_reason"] != "death"
         on_astar = ate or (
             suggested is not None
-            and _effective_action(direction, action) == suggested
+            and heading == suggested
         )
         path_known = suggested is not None
 
@@ -178,7 +158,7 @@ def run_episode(agent: SarsaAgent, seed: int, width: int, height: int) -> dict:
         if terminated or truncated:
             death_kind = ""
             if info["end_reason"] == "death":
-                nx, ny = _next_cell(head, _effective_action(direction, last_action))
+                nx, ny = _next_cell(head, _to_heading(direction, last_action))
                 if not (0 <= nx < width and 0 <= ny < height):
                     death_kind = "wall"
                 else:
@@ -211,7 +191,6 @@ def run_episode(agent: SarsaAgent, seed: int, width: int, height: int) -> dict:
                 "on_astar_short": on_astar_short,
                 "detours_short": detours_short,
                 "unseen_state_steps": unseen_state_steps,
-                "reverse_picks": reverse_picks,
                 "n_food": len(food_legs),
                 "mean_extra_short": float(np.mean(extras)) if extras else None,
                 "mean_extra_all": float(np.mean(extras_all)) if extras_all else None,
@@ -237,7 +216,6 @@ def summarize(results: list[dict], grid: str) -> dict:
     collision_open = sum(r["chose_collision_when_open"] for r in results)
     tight_open = sum(r["chose_tight_when_open"] for r in results)
     trap_open = sum(r["chose_trap_when_open"] for r in results)
-    reverse = sum(r["reverse_picks"] for r in results)
     unseen_deaths = sum(1 for r in deaths if r["last_unseen"])
     suicide_open = sum(
         1
@@ -290,7 +268,6 @@ def summarize(results: list[dict], grid: str) -> dict:
         "chose_collision_when_open_total": collision_open,
         "chose_tight_when_open_total": tight_open,
         "chose_trap_when_open_total": trap_open,
-        "reverse_picks_total": reverse,
         "mean_extra_steps_when_short": float(np.mean(extras_short)) if extras_short else None,
         "mean_extra_steps_all_food": float(np.mean(extras_all)) if extras_all else None,
         "mean_astar_follow_when_short": float(np.mean(follow)) if follow else None,
@@ -323,7 +300,6 @@ def print_summary(s: dict) -> None:
         f"{s['chose_tight_when_open_total']}/"
         f"{s['chose_trap_when_open_total']}"
     )
-    print(f"reverse (180°) picks: {s['reverse_picks_total']}")
     print(
         f"A* follow when snake short (fill<20%): "
         f"{s['mean_astar_follow_when_short']}"

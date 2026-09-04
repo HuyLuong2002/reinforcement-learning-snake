@@ -6,7 +6,7 @@ SARSA (on-policy):
 Khác Q-learning (off-policy) ở chỗ dùng a' thực sự sẽ chọn (epsilon-greedy),
 không dùng max_a' Q(s',a').
 
-Khi chơi / eval: greedy argmax Q (cấm 180°). Không heuristic, không A* chọn hộ.
+Khi chơi / eval: greedy argmax Q trên 3 hướng tương đối. Không heuristic, không A* chọn hộ.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ class SarsaAgent:
         Chọn action:
           - greedy=False (train): epsilon-greedy — random với xác suất epsilon
           - greedy=True  (eval/play): luôn chọn action có Q cao nhất
-          - forbidden: không chọn (thường là 180° — env cũng biến thành đi thẳng)
+          - forbidden: giữ tương thích API; action space đã chỉ còn 3 hướng hợp lệ
         """
         state_key = self._as_state(state)
         q = self.q_table[state_key]

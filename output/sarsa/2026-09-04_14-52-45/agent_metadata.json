@@ -1,11 +1,10 @@
 {
-  "q_mean": 0.14293792354336557,
-  "q_std": 9.31300143900907,
-  "q_max": 58.29257767189439,
-  "q_min": -99.7868587659134,
-  "nonzero_states": 2161,
-  "agent": "q_learning",
-  "policy": "off-policy",
+  "q_mean": -0.6563046853629708,
+  "q_std": 8.818637739998893,
+  "q_max": 38.1830135418668,
+  "q_min": -92.55439162002376,
+  "nonzero_states": 2196,
+  "agent": "sarsa",
   "grid": "15x20",
   "grid_width": 15,
   "grid_height": 20,
@@ -22,11 +21,11 @@
     4,
     5
   ],
-  "n_actions": 4,
+  "n_actions": 3,
   "seed": 42,
   "episodes": 30000,
-  "best_eval_score": 55.65,
-  "best_episode": 29000,
+  "best_eval_score": 55.12,
+  "best_episode": 24000,
   "final_episode": 30000,
   "best_checkpoint": "agent_best.pkl",
   "final_checkpoint": "agent.pkl",
@@ -46,7 +45,7 @@
       "reward_unsafe": 0.8,
       "death_penalty_per_score": 1.0
     },
-    "q_learning": {
+    "sarsa": {
       "alpha": 0.1,
       "gamma": 0.99,
       "epsilon_start": 1.0,

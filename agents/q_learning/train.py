@@ -8,7 +8,7 @@ Mỗi lần chạy tạo folder mới: output/q_learning/YYYY-MM-DD_HH-MM-SS/
   - *.png
   - agent_metadata.json
 
-Policy: off-policy (max Q hợp lệ). Chọn action cùng SARSA (select_action, cấm 180°).
+Policy: off-policy (max Q trên 3 hướng tương đối). Chọn action cùng SARSA (select_action).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from common.env_hyperparameters import PLAY_GRID_CHOICES, grid_label
 from common.policy import select_action
 from common.random_policy import run_random_episode
 from common.run_store import new_run_dir
-from common.snake_env import OPPOSITE, SnakeEnv
+from common.snake_env import SnakeEnv
 from common.training_plots import save_training_plots
 
 
@@ -57,7 +57,7 @@ def build_agent(
 def evaluate_agent(
     env: SnakeEnv, agent: QLearningAgent, n_episodes: int, rng: np.random.Generator
 ) -> dict:
-    """Đo policy Q-learning: greedy argmax Q (cấm 180°), không heuristic."""
+    """Đo policy Q-learning: greedy argmax Q trên 3 hướng, không heuristic."""
     scores: list[int] = []
     rewards: list[float] = []
     lengths: list[int] = []
@@ -150,10 +150,7 @@ def train_q_learning(
                 steps += 1
                 score = info.get("score", score)
 
-                next_forbidden = None
-                if not done and env.state is not None:
-                    next_forbidden = OPPOSITE[env.state.direction]
-                agent.update(obs, action, reward, next_obs, done, forbidden=next_forbidden)
+                agent.update(obs, action, reward, next_obs, done)
                 obs = next_obs
 
                 if done:
