@@ -3,10 +3,13 @@
 Q-learning (off-policy):
   Q(s,a) ← Q(s,a) + α [ r + γ max_a' Q(s',a') - Q(s,a) ]
 
-Khác SARSA (on-policy) ở chỗ dùng max Q của state tiếp theo,
-không dùng a' thực sự sẽ chọn (epsilon-greedy).
+Khác SARSA (on-policy) ở chỗ dùng max Q của các action hợp lệ ở s',
+không dùng a' epsilon-greedy thật sự sẽ chọn.
 
-Khi chơi game: greedy_policy_action() — luôn chọn argmax Q, không explore.
+max loại 180° (cùng tập action với select_action) — env biến lùi thành đi thẳng
+nên không được đưa Q(lùi) vào target.
+
+Khi chơi / eval: greedy argmax Q (cấm 180°). Không heuristic, không A* chọn hộ.
 """
 
 from __future__ import annotations
@@ -54,22 +57,35 @@ class QLearningAgent:
             for i in range(len(self.n_state_dims))
         )
 
+    def _legal_actions(self, forbidden: int | None) -> list[int]:
+        if forbidden is None:
+            return list(range(self.n_actions))
+        return [a for a in range(self.n_actions) if a != forbidden]
+
     def get_q(self, state: np.ndarray | Sequence[int], action: int) -> float:
         """Lấy giá trị Q(s, a) — tiện debug / phân tích."""
         state_key = self._as_state(state)
         action = int(np.clip(action, 0, self.n_actions - 1))
         return float(self.q_table[state_key][action])
 
-    def choose_action(self, state: np.ndarray | Sequence[int], greedy: bool = False) -> int:
+    def choose_action(
+        self,
+        state: np.ndarray | Sequence[int],
+        greedy: bool = False,
+        forbidden: int | None = None,
+    ) -> int:
         """
         Chọn action:
           - greedy=False (train): epsilon-greedy — random với xác suất epsilon
           - greedy=True  (eval/play): luôn chọn action có Q cao nhất
+          - forbidden: không chọn (thường là 180° — env cũng biến thành đi thẳng)
         """
         state_key = self._as_state(state)
+        q = self.q_table[state_key]
+        legal = self._legal_actions(forbidden)
         if not greedy and self.rng.random() < self.epsilon:
-            return int(self.rng.integers(0, self.n_actions))
-        return int(np.argmax(self.q_table[state_key]))
+            return int(legal[int(self.rng.integers(0, len(legal)))])
+        return int(max(legal, key=lambda a: q[a]))
 
     def update(
         self,
@@ -78,19 +94,25 @@ class QLearningAgent:
         reward: float,
         next_state: np.ndarray | Sequence[int],
         done: bool,
+        forbidden: int | None = None,
     ) -> float:
         """
-        Cập nhật Q-learning một bước.
+        Cập nhật Q-learning một bước (off-policy).
 
-        Target dùng max_a' Q(s', a') — off-policy, khác SARSA dùng Q(s', a').
+        Target: max Q(s', a') trên action hợp lệ (cấm 180° nếu có),
+        không dùng a' epsilon-greedy — khác SARSA on-policy.
         """
         state_key = self._as_state(state)
         next_state_key = self._as_state(next_state)
         action = int(np.clip(action, 0, self.n_actions - 1))
 
         current_q = self.q_table[state_key][action]
-        # done=True → không cộng max Q(s') vì episode kết thúc
-        target = reward if done else reward + self.gamma * float(np.max(self.q_table[next_state_key]))
+        if done:
+            target = reward
+        else:
+            legal = self._legal_actions(forbidden)
+            max_q = max(float(self.q_table[next_state_key][a]) for a in legal)
+            target = reward + self.gamma * max_q
         td_error = target - current_q
         self.q_table[state_key][action] = current_q + self.alpha * td_error
         return float(td_error)
@@ -100,9 +122,13 @@ class QLearningAgent:
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         return self.epsilon
 
-    def greedy_policy_action(self, state: np.ndarray | Sequence[int]) -> int:
+    def greedy_policy_action(
+        self,
+        state: np.ndarray | Sequence[int],
+        forbidden: int | None = None,
+    ) -> int:
         """Policy khi chơi game / eval — không explore."""
-        return self.choose_action(state, greedy=True)
+        return self.choose_action(state, greedy=True, forbidden=forbidden)
 
     def save(self, path: Path) -> None:
         """Lưu Q-table + hyperparameters ra file .pkl."""

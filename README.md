@@ -36,8 +36,9 @@ Cùng một Q-table chơi được cả hai màn vì state là vector tương đ
 ```bash
 pip install -r requirements.txt
 
-# Train SARSA (mặc định lưới 10×10; chỉnh episodes trong agents/sarsa/hyperparameters.py)
+# Train (mặc định lưới 15×20)
 python -m agents.sarsa.train
+python -m agents.q_learning.train --grid 15x20
 
 # Chơi game — menu: tick "Load model", chọn lần train trên select, rồi chọn 10×10 hoặc 30×30
 # Bỏ tick = random.

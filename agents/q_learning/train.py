@@ -1,12 +1,14 @@
 """Train agent Q-learning tabular trên Snake.
 
-Output (trong output/q_learning/training/):
+Mỗi lần chạy tạo folder mới: output/q_learning/YYYY-MM-DD_HH-MM-SS/
   - training_log.csv
   - agent_best.pkl
   - agent.pkl
   - agent_last.pkl
   - *.png
   - agent_metadata.json
+
+Policy: off-policy (max Q hợp lệ). Chọn action cùng SARSA (select_action, cấm 180°).
 """
 
 from __future__ import annotations
@@ -18,28 +20,27 @@ from pathlib import Path
 import numpy as np
 
 from agents.q_learning.agent import QLearningAgent
-from agents.q_learning.hyperparameters import DEFAULT_HYPERPARAMETERS, Hyperparameters, build_config
+from agents.q_learning.hyperparameters import (
+    AGENT_NAME,
+    DEFAULT_HYPERPARAMETERS,
+    Hyperparameters,
+    build_config,
+)
+from common.env_hyperparameters import PLAY_GRID_CHOICES, grid_label
+from common.policy import select_action
 from common.random_policy import run_random_episode
-from common.snake_env import SnakeEnv
+from common.run_store import new_run_dir
+from common.snake_env import OPPOSITE, SnakeEnv
 from common.training_plots import save_training_plots
 
 
 def build_env(config: Hyperparameters, rng: np.random.Generator) -> SnakeEnv:
-    env_cfg = config.env
-    return SnakeEnv(
-        grid_size=env_cfg.grid_size,
-        max_steps=env_cfg.max_steps,
-        max_steps_without_food=env_cfg.max_steps_without_food,
-        reward_food=env_cfg.reward_food,
-        reward_death=env_cfg.reward_death,
-        reward_step=env_cfg.reward_step,
-        reward_closer=env_cfg.reward_closer,
-        death_penalty_per_score=env_cfg.death_penalty_per_score,
-        rng=rng,
-    )
+    return config.env.create_env(rng)
 
 
-def build_agent(config: Hyperparameters, env: SnakeEnv, rng: np.random.Generator) -> QLearningAgent:
+def build_agent(
+    config: Hyperparameters, env: SnakeEnv, rng: np.random.Generator
+) -> QLearningAgent:
     q_cfg = config.q_learning
     return QLearningAgent(
         n_state_dims=env.n_state_dims(),
@@ -53,7 +54,10 @@ def build_agent(config: Hyperparameters, env: SnakeEnv, rng: np.random.Generator
     )
 
 
-def evaluate_agent(env: SnakeEnv, agent: QLearningAgent, n_episodes: int, rng: np.random.Generator) -> dict:
+def evaluate_agent(
+    env: SnakeEnv, agent: QLearningAgent, n_episodes: int, rng: np.random.Generator
+) -> dict:
+    """Đo policy Q-learning: greedy argmax Q (cấm 180°), không heuristic."""
     scores: list[int] = []
     rewards: list[float] = []
     lengths: list[int] = []
@@ -65,7 +69,7 @@ def evaluate_agent(env: SnakeEnv, agent: QLearningAgent, n_episodes: int, rng: n
         score = 0
 
         while True:
-            action = agent.choose_action(obs, greedy=True)
+            action = select_action(env, agent, obs, greedy=True)
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             steps += 1
@@ -84,19 +88,25 @@ def evaluate_agent(env: SnakeEnv, agent: QLearningAgent, n_episodes: int, rng: n
     }
 
 
-def train_q_learning(config: Hyperparameters = DEFAULT_HYPERPARAMETERS) -> tuple[QLearningAgent, SnakeEnv]:
+def train_q_learning(
+    config: Hyperparameters = DEFAULT_HYPERPARAMETERS,
+) -> tuple[QLearningAgent, SnakeEnv, Path]:
     train_cfg = config.training
-    output_dir = Path(train_cfg.output_dir)
+    if train_cfg.output_dir is None:
+        output_dir = new_run_dir(AGENT_NAME)
+    else:
+        output_dir = Path(train_cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(
-        f"Training Q-Learning: episodes={train_cfg.episodes}, seed={train_cfg.seed}, "
-        f"eval_every={train_cfg.eval_every}, output={output_dir}"
-    )
 
     rng = np.random.default_rng(train_cfg.seed)
     env = build_env(config, rng)
     agent = build_agent(config, env, rng)
+
+    print(
+        f"Training Q-Learning (off-policy): grid={grid_label(env.width, env.height)}, "
+        f"episodes={train_cfg.episodes}, seed={train_cfg.seed}, "
+        f"eval_every={train_cfg.eval_every}, output={output_dir}"
+    )
 
     log_path = output_dir / "training_log.csv"
     best_score = -1.0
@@ -115,7 +125,14 @@ def train_q_learning(config: Hyperparameters = DEFAULT_HYPERPARAMETERS) -> tuple
     with log_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["episode", "score", "reward", "steps", "epsilon", "eval_mean_score"],
+            fieldnames=[
+                "episode",
+                "score",
+                "reward",
+                "steps",
+                "epsilon",
+                "eval_mean_score",
+            ],
         )
         writer.writeheader()
 
@@ -126,14 +143,17 @@ def train_q_learning(config: Hyperparameters = DEFAULT_HYPERPARAMETERS) -> tuple
             score = 0
 
             while True:
-                action = agent.choose_action(obs)
+                action = select_action(env, agent, obs)
                 next_obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
                 total_reward += reward
                 steps += 1
                 score = info.get("score", score)
 
-                agent.update(obs, action, reward, next_obs, done)
+                next_forbidden = None
+                if not done and env.state is not None:
+                    next_forbidden = OPPOSITE[env.state.direction]
+                agent.update(obs, action, reward, next_obs, done, forbidden=next_forbidden)
                 obs = next_obs
 
                 if done:
@@ -177,15 +197,19 @@ def train_q_learning(config: Hyperparameters = DEFAULT_HYPERPARAMETERS) -> tuple
                 print(
                     f"Episode {episode}/{train_cfg.episodes} | "
                     f"score={score} reward={total_reward:.2f} eps={agent.epsilon:.3f}"
-                    + (f" eval_score={eval_mean_score}" if eval_mean_score != "" else ""),
+                    + (
+                        f" eval_score={eval_mean_score}"
+                        if eval_mean_score != ""
+                        else ""
+                    ),
                     flush=True,
                 )
-                # Xả bộ đệm xuống đĩa, nếu không training_log.csv trông như bị
-                # đứng hàng nghìn episode dù train vẫn đang chạy bình thường.
                 f.flush()
 
     random_baseline = run_random_episode(env, rng)
-    print(f"Random baseline (1 ep): score={random_baseline['score']} reward={random_baseline['total_reward']:.2f}")
+    print(
+        f"Random baseline (1 ep): score={random_baseline['score']} reward={random_baseline['total_reward']:.2f}"
+    )
 
     plot_paths = save_training_plots(
         episodes=history_episodes,
@@ -219,15 +243,28 @@ def train_q_learning(config: Hyperparameters = DEFAULT_HYPERPARAMETERS) -> tuple
         output_dir / "agent_metadata.json",
         extra={
             "agent": "q_learning",
+            "policy": "off-policy",
+            "grid": grid_label(env.width, env.height),
+            "grid_width": env.width,
+            "grid_height": env.height,
+            "n_cells": env.n_cells,
+            "max_score": SnakeEnv.max_score(env.width, env.height),
+            "max_steps": env.max_steps,
+            "max_steps_without_food": env.max_steps_without_food,
+            "n_state_dims": list(agent.n_state_dims),
+            "n_actions": agent.n_actions,
+            "seed": train_cfg.seed,
+            "episodes": train_cfg.episodes,
             "best_eval_score": best_score,
             "best_episode": best_episode,
             "final_episode": train_cfg.episodes,
             "best_checkpoint": str(best_path.name) if best_path.exists() else None,
             "final_checkpoint": str(final_path.name),
             "last_checkpoint": str(last_path.name),
+            "hyperparameters": config.to_dict(),
         },
     )
-    return agent, env
+    return agent, env, output_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -251,7 +288,14 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=str,
         default=None,
-        help=f"Thư mục output (mặc định: {defaults.output_dir})",
+        help="Thư mục output (mặc định: output/q_learning/YYYY-MM-DD_HH-MM-SS)",
+    )
+    parser.add_argument(
+        "--grid",
+        type=str,
+        default=None,
+        choices=list(PLAY_GRID_CHOICES),
+        help="Lưới train: 10x10, 15x20 hoặc 30x30 (mặc định: 15x20)",
     )
     return parser.parse_args()
 
@@ -262,9 +306,9 @@ def main() -> None:
         episodes=args.episodes,
         seed=args.seed,
         output_dir=args.output_dir,
+        grid=args.grid,
     )
-    agent, env = train_q_learning(config)
-    out = config.training.output_dir
+    agent, env, out = train_q_learning(config)
     print("Training complete.")
     print(f"  Best model:  {out / 'agent.pkl'}")
     print(f"  Best ckpt:   {out / 'agent_best.pkl'}")

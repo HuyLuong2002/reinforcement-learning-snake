@@ -1,39 +1,22 @@
 # Q-Learning Agent
 
-Agent tabular Q-learning (off-policy) chơi Snake — cấu trúc song song với `agents/sarsa/`.
+Agent tabular Q-learning (**off-policy**) chơi Snake — cùng env / `select_action` / hyperparameter với SARSA.
 
-## Khác SARSA
+## Policy
 
-- **Q-learning:** `Q(s,a) ← Q(s,a) + α [ r + γ max_a' Q(s',a') − Q(s,a) ]`
-- **SARSA:** dùng `Q(s', a')` với `a'` epsilon-greedy thật sự sẽ chọn, không dùng max.
+- **SARSA = on-policy:** cập nhật bằng `Q(s', a')` với `a'` epsilon-greedy thật sự sẽ chọn.
+- **Q-learning = off-policy:** cập nhật bằng `max Q(s', a')` trên 3 hướng hợp lệ (cấm 180°).
 
-## Cấu trúc
-
-```
-agents/q_learning/
-├── agent.py           # QLearningAgent
-├── hyperparameters.py # tham số Q-learning + training
-├── train.py           # python -m agents.q_learning.train
-└── analyze_games.py
-```
+Cả hai lúc train/eval/chơi đều chọn action qua `common.policy.select_action` (ε-greedy / greedy, cấm 180°). Không heuristic, không A*.
 
 ## Chạy
 
 ```bash
-# Train (chỉnh episodes trong agents/q_learning/hyperparameters.py)
+# Train mặc định 15×20, 30000 episode (cùng SARSA)
 python -m agents.q_learning.train
 
-# Phân tích ván chơi
 python -m agents.q_learning.analyze_games --games 10
-
-# Chơi game
 python app.py --agent q_learning
 ```
 
-## Output model
-
-Lưu vào `output/q_learning/YYYY-MM-DD_HH-MM-SS/` (mỗi lần train một folder):
-
-- `agent.pkl` — model dùng cho game (= best)
-- `agent_best.pkl` — checkpoint eval tốt nhất
-- `agent_last.pkl` — episode cuối
+Output: `output/q_learning/YYYY-MM-DD_HH-MM-SS/` (`agent.pkl` = best).
