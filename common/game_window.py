@@ -43,9 +43,15 @@ COLOR_CHECK_ON = (80, 170, 120)
 COLOR_DROPDOWN_BG = (32, 36, 52)
 COLOR_DROPDOWN_SEL = (60, 120, 200)
 DROPDOWN_VISIBLE = 6
-SELECT_H = 40
+SELECT_H = 46
+OPTION_H = 40
 ALGO_BTN_H = 40
 ALGO_BTN_GAP = 10
+MENU_TEXT_PAD = 14
+CARET_SLOT = 34
+MENU_LEFT_W = 460
+MENU_RIGHT_W = 300
+MENU_COL_GAP = 28
 
 
 class PlayableAgent(Protocol):
@@ -79,6 +85,30 @@ class AgentMenuItem:
     name: str
     label: str
     train_command: str
+
+
+def fit_text(
+    font: pygame.font.Font,
+    text: str,
+    color: tuple[int, int, int],
+    max_width: int,
+) -> pygame.Surface:
+    """Rút chữ bằng '...' nếu dài hơn ô, để không tràn ra nút bên cạnh."""
+    surface = font.render(text, True, color)
+    if max_width <= 0 or surface.get_width() <= max_width:
+        return surface
+    ellipsis = "..."
+    lo, hi = 0, len(text)
+    best = ellipsis
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = text[:mid].rstrip() + ellipsis
+        if font.size(candidate)[0] <= max_width:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return font.render(best, True, color)
 
 
 def cell_size_for_board(
@@ -283,54 +313,108 @@ class GameWindow:
         self.screen = pygame.display.set_mode((self.width, self.height))
         self._layout_buttons()
 
+    def _column_widths(self) -> tuple[int, int, int, int]:
+        """Model bên trái, màn chơi bên phải — dropdown không đè chữ màn."""
+        gap = MENU_COL_GAP
+        margin = 20
+        right_w = MENU_RIGHT_W
+        left_w = MENU_LEFT_W
+        avail = self.width - 2 * margin
+        if left_w + gap + right_w > avail:
+            left_w = max(260, avail - gap - right_w)
+            if left_w + gap + right_w > avail:
+                right_w = max(220, avail - gap - left_w)
+        total = left_w + gap + right_w
+        left_x = (self.width - total) // 2
+        return left_x, left_x + left_w + gap, left_w, right_w
+
     def _layout_buttons(self) -> None:
-        btn_w, btn_h = 300, 46
+        btn_h = 46
         chk_h = 40
         cx = self.width // 2
-        ox, oy = self.board_origin
+        oy = self.board_origin[1]
         board_h = self.env.height * self.cell_size
         n_levels = len(PLAYABLE_LEVELS)
         n_algos = max(1, len(self.available_agents))
-        algo_block = ALGO_BTN_H + 10
-        select_block = (SELECT_H + 10) if self.use_agent else 0
-        stack_h = (
-            chk_h
-            + 16
-            + algo_block
-            + select_block
-            + n_levels * btn_h
-            + max(0, n_levels - 1) * 12
-        )
-        menu_y = oy + max(80, (board_h - stack_h) // 2)
-        self.use_agent_hit = pygame.Rect(cx - btn_w // 2, menu_y, btn_w, chk_h)
+
+        left_x, right_x, left_w, right_w = self._column_widths()
+        left_h = chk_h + 10 + ALGO_BTN_H
+        if self.use_agent:
+            left_h += 10 + SELECT_H
+        right_h = n_levels * btn_h + max(0, n_levels - 1) * 12
+        stack_h = max(left_h, right_h)
+
+        top_min = oy + 68
+        bottom_limit = oy + board_h - 12
+        if bottom_limit - top_min >= stack_h:
+            menu_y = top_min + (bottom_limit - top_min - stack_h) // 2
+        else:
+            menu_y = top_min
+        if self.use_agent:
+            # Giữ chỗ phía dưới ô model để danh sách mở ra không đè HUD.
+            select_bottom = menu_y + left_h
+            room = bottom_limit - (select_bottom + 4)
+            min_room = 3 * OPTION_H
+            if room < min_room:
+                menu_y = max(top_min, menu_y - (min_room - room))
+
+        self.use_agent_hit = pygame.Rect(left_x, menu_y, left_w, chk_h)
         self.algo_btns = {}
         algo_y = menu_y + chk_h + 10
-        total_gap = ALGO_BTN_GAP * (n_algos - 1)
-        each_w = (btn_w - total_gap) // n_algos
+        used = 0
         for i, item in enumerate(self.available_agents):
+            if i == n_algos - 1:
+                each_w = left_w - used
+            else:
+                each_w = (left_w - ALGO_BTN_GAP * (n_algos - 1)) // n_algos
             self.algo_btns[item.name] = pygame.Rect(
-                cx - btn_w // 2 + i * (each_w + ALGO_BTN_GAP),
-                algo_y,
-                each_w,
-                ALGO_BTN_H,
+                left_x + used, algo_y, each_w, ALGO_BTN_H
             )
-        self.run_select_hit = pygame.Rect(
-            cx - btn_w // 2,
-            menu_y + chk_h + 10 + algo_block,
-            btn_w,
-            SELECT_H,
-        )
+            used += each_w + ALGO_BTN_GAP
+        select_y = algo_y + ALGO_BTN_H + 10
+        self.run_select_hit = pygame.Rect(left_x, select_y, left_w, SELECT_H)
+
         self.level_btns = {}
-        levels_y = menu_y + chk_h + 16 + algo_block + select_block
         for i, shape in enumerate(PLAYABLE_LEVELS):
             self.level_btns[shape] = pygame.Rect(
-                cx - btn_w // 2,
-                levels_y + i * (btn_h + 12),
-                btn_w,
+                right_x,
+                menu_y + i * (btn_h + 12),
+                right_w,
                 btn_h,
             )
         self.start_btn = pygame.Rect(cx - 90, oy + board_h // 2 - 28, 180, 48)
         self.back_btn = pygame.Rect(cx - 90, self.start_btn.bottom + 12, 180, 40)
+
+    def _dropdown_layout(self) -> tuple[pygame.Rect, int] | None:
+        """Panel danh sách model, mở xuống và dừng trước HUD."""
+        if not self.model_runs:
+            return None
+        hit = self.run_select_hit
+        board_top = self.board_origin[1] + 8
+        board_bottom = (
+            self.board_origin[1] + self.env.height * self.cell_size - 8
+        )
+        below = board_bottom - (hit.bottom + 4)
+        above = hit.y - 4 - board_top
+        open_up = below < OPTION_H and above > below
+        space = above if open_up else below
+        visible = min(
+            DROPDOWN_VISIBLE,
+            len(self.model_runs),
+            max(1, space // OPTION_H),
+        )
+        height = visible * OPTION_H
+        if open_up:
+            panel = pygame.Rect(hit.x, hit.y - 4 - height, hit.w, height)
+        else:
+            panel = pygame.Rect(hit.x, hit.bottom + 4, hit.w, height)
+        if panel.bottom > board_bottom:
+            panel.y -= panel.bottom - board_bottom
+        if panel.top < board_top:
+            panel.y = board_top
+        max_scroll = max(0, len(self.model_runs) - visible)
+        self.dropdown_scroll = min(self.dropdown_scroll, max_scroll)
+        return panel, visible
 
     def apply_level(self, width: int, height: int | None = None) -> None:
         if self.make_env is None:
@@ -431,18 +515,38 @@ class GameWindow:
             self.screen, COLOR_WARN_BORDER, (0, banner_h), (self.width, banner_h), 2
         )
 
-        text = self.font.render(
+        text = fit_text(
+            self.font,
             f"Chua co model — chay: {self.train_command_hint}  ({self.model_path_hint})",
-            True,
             COLOR_WARN_TEXT,
+            self.width - 16,
         )
-        self.screen.blit(text, (8, 9))
+        self.screen.blit(text, (8, (banner_h - text.get_height()) // 2))
+
+    def _wrap_hud(self, text: str) -> list[str]:
+        max_width = self.width - 32
+        if self.font.size(text)[0] <= max_width:
+            return [text]
+        parts = text.split("  |  ")
+        lines: list[str] = []
+        current = ""
+        for part in parts:
+            candidate = part if not current else f"{current}  |  {part}"
+            if self.font.size(candidate)[0] <= max_width:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            current = part
+        if current:
+            lines.append(current)
+        return lines or [text]
 
     def draw_hud(self) -> None:
         ox, oy = self.board_origin
         hud_y = oy + self.env.height * self.cell_size + 14
         agent_label = (
-            f"{self.agent_label} (greedy Q)"
+            f"{self.agent_label} (choi: eps=0, chon argmax Q)"
             if self.using_trained_agent()
             else "Random"
         )
@@ -479,9 +583,13 @@ class GameWindow:
                 f"Choi lai / Chon man  |  Esc thoat"
             )
 
-        for i, (text, color) in enumerate([(line1, COLOR_TEXT), (line2, COLOR_MUTED)]):
+        rows: list[tuple[str, tuple[int, int, int]]] = []
+        for text, color in ((line1, COLOR_TEXT), (line2, COLOR_MUTED)):
+            for part in self._wrap_hud(text):
+                rows.append((part, color))
+        for i, (text, color) in enumerate(rows[:3]):
             surface = self.font.render(text, True, color)
-            self.screen.blit(surface, (16, hud_y + i * 24))
+            self.screen.blit(surface, (16, hud_y + i * 22))
 
     def draw_button(
         self, rect: pygame.Rect, label: str, hovered: bool, large: bool = True
@@ -489,7 +597,7 @@ class GameWindow:
         color = COLOR_BTN_HOVER if hovered else COLOR_BTN
         pygame.draw.rect(self.screen, color, rect, border_radius=8)
         font = self.font_lg if large else self.font_md
-        text = font.render(label, True, COLOR_BTN_TEXT)
+        text = fit_text(font, label, COLOR_BTN_TEXT, rect.w - 16)
         text_rect = text.get_rect(center=rect.center)
         self.screen.blit(text, text_rect)
 
@@ -503,7 +611,9 @@ class GameWindow:
             inner = box.inflate(-8, -8)
             pygame.draw.rect(self.screen, COLOR_CHECK_ON, inner, border_radius=2)
         label = "Load model da train"
-        text = self.font_md.render(label, True, COLOR_BTN_TEXT)
+        text = fit_text(
+            self.font_md, label, COLOR_BTN_TEXT, hit.right - box.right - 24
+        )
         self.screen.blit(text, (box.right + 12, hit.y + (hit.h - text.get_height()) // 2))
 
     def draw_algo_select(self, mouse_pos: tuple[int, int]) -> None:
@@ -520,7 +630,7 @@ class GameWindow:
             else:
                 color = COLOR_BTN
             pygame.draw.rect(self.screen, color, rect, border_radius=8)
-            text = self.font_md.render(item.label, True, COLOR_BTN_TEXT)
+            text = fit_text(self.font_md, item.label, COLOR_BTN_TEXT, rect.w - 16)
             self.screen.blit(text, text.get_rect(center=rect.center))
 
     def draw_run_select(self, mouse_pos: tuple[int, int]) -> None:
@@ -538,16 +648,25 @@ class GameWindow:
             label = self.model_runs[self.selected_run_i].label()
         else:
             label = "Chua co lan train"
-        caret = "^" if self.dropdown_open else "v"
-        text = self.font.render(label, True, COLOR_BTN_TEXT)
-        caret_s = self.font_md.render(caret, True, COLOR_BTN_TEXT)
-        self.screen.blit(
-            text, (hit.x + 12, hit.y + (hit.h - text.get_height()) // 2)
+        text = fit_text(
+            self.font,
+            label,
+            COLOR_BTN_TEXT,
+            hit.w - MENU_TEXT_PAD - CARET_SLOT,
         )
         self.screen.blit(
-            caret_s,
-            (hit.right - 22, hit.y + (hit.h - caret_s.get_height()) // 2),
+            text, (hit.x + MENU_TEXT_PAD, hit.y + (hit.h - text.get_height()) // 2)
         )
+        self._draw_caret(hit, self.dropdown_open)
+
+    def _draw_caret(self, rect: pygame.Rect, opened: bool) -> None:
+        cx = rect.right - CARET_SLOT // 2
+        cy = rect.centery
+        if opened:
+            points = [(cx - 6, cy + 3), (cx + 6, cy + 3), (cx, cy - 4)]
+        else:
+            points = [(cx - 6, cy - 3), (cx + 6, cy - 3), (cx, cy + 4)]
+        pygame.draw.polygon(self.screen, COLOR_BTN_TEXT, points)
 
     def draw_run_dropdown(self, mouse_pos: tuple[int, int]) -> None:
         if not self.use_agent or not self.dropdown_open or not self.model_runs:
@@ -555,33 +674,61 @@ class GameWindow:
             self._dropdown_panel = pygame.Rect(0, 0, 0, 0)
             return
 
-        hit = self.run_select_hit
-        visible = min(DROPDOWN_VISIBLE, len(self.model_runs))
-        opt_h = 36
-        panel = pygame.Rect(hit.x, hit.bottom + 4, hit.w, visible * opt_h)
-        pygame.draw.rect(self.screen, COLOR_DROPDOWN_BG, panel, border_radius=6)
-        pygame.draw.rect(self.screen, COLOR_BOARD_BORDER, panel, width=1, border_radius=6)
+        layout = self._dropdown_layout()
+        if layout is None:
+            self._option_hits = []
+            self._dropdown_panel = pygame.Rect(0, 0, 0, 0)
+            return
+        panel, visible = layout
+        shadow = pygame.Surface((panel.w, panel.h), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 110), shadow.get_rect(), border_radius=8)
+        self.screen.blit(shadow, (panel.x, panel.y + 3))
+        pygame.draw.rect(self.screen, COLOR_DROPDOWN_BG, panel, border_radius=8)
+
         start = self.dropdown_scroll
         end = min(start + visible, len(self.model_runs))
+        scrollable = len(self.model_runs) > visible
+        text_max = panel.w - MENU_TEXT_PAD * 2 - (12 if scrollable else 0)
         self._option_hits = []
+        prev_clip = self.screen.get_clip()
+        self.screen.set_clip(panel)
         for row, run_i in enumerate(range(start, end)):
-            rect = pygame.Rect(panel.x, panel.y + row * opt_h, panel.w, opt_h)
+            rect = pygame.Rect(panel.x, panel.y + row * OPTION_H, panel.w, OPTION_H)
             if run_i == self.selected_run_i or rect.collidepoint(mouse_pos):
-                pygame.draw.rect(self.screen, COLOR_DROPDOWN_SEL, rect)
-            opt = self.font.render(self.model_runs[run_i].label(), True, COLOR_BTN_TEXT)
+                highlight = rect.inflate(-6, -4)
+                pygame.draw.rect(
+                    self.screen, COLOR_DROPDOWN_SEL, highlight, border_radius=6
+                )
+            opt = fit_text(
+                self.font,
+                self.model_runs[run_i].label(),
+                COLOR_BTN_TEXT,
+                text_max,
+            )
             self.screen.blit(
-                opt, (rect.x + 12, rect.y + (rect.h - opt.get_height()) // 2)
+                opt, (rect.x + MENU_TEXT_PAD, rect.y + (rect.h - opt.get_height()) // 2)
             )
             self._option_hits.append((run_i, rect))
+        if scrollable:
+            track = pygame.Rect(panel.right - 10, panel.y + 6, 4, panel.h - 12)
+            pygame.draw.rect(self.screen, COLOR_BOARD_BORDER, track, border_radius=2)
+            thumb_h = max(16, track.h * visible // len(self.model_runs))
+            span = max(1, len(self.model_runs) - visible)
+            thumb_y = track.y + (track.h - thumb_h) * self.dropdown_scroll // span
+            thumb = pygame.Rect(track.x, thumb_y, track.w, thumb_h)
+            pygame.draw.rect(self.screen, COLOR_BTN_TEXT, thumb, border_radius=2)
+        self.screen.set_clip(prev_clip)
+        pygame.draw.rect(
+            self.screen, COLOR_BOARD_BORDER, panel, width=1, border_radius=8
+        )
         self._dropdown_panel = panel
 
     def draw_overlay_menu(self, mouse_pos: tuple[int, int]) -> None:
-        ox, oy = self.board_origin
-        overlay = pygame.Surface(
-            (self.width, oy + self.env.height * self.cell_size), pygame.SRCALPHA
-        )
+        oy = self.board_origin[1]
+        board_h = self.env.height * self.cell_size
+        overlay = pygame.Surface((self.width, board_h), pygame.SRCALPHA)
         overlay.fill(COLOR_OVERLAY)
-        self.screen.blit(overlay, (0, 0))
+        self.screen.blit(overlay, (0, oy))
 
         title = self.font_lg.render(f"{self.agent_label} Snake", True, COLOR_TEXT)
         title_rect = title.get_rect(center=(self.width // 2, oy + 36))
@@ -612,10 +759,19 @@ class GameWindow:
                 self.back_btn.collidepoint(mouse_pos),
             )
 
-        if self.use_agent and self.agent is None:
-            warn = self.font.render("Chua co model — random policy", True, COLOR_WARN_TEXT)
+        if self.use_agent and self.agent is None and not self.dropdown_open:
+            warn = fit_text(
+                self.font,
+                "Chua co model — random policy",
+                COLOR_WARN_TEXT,
+                self.run_select_hit.w,
+            )
             self.screen.blit(
-                warn, warn.get_rect(center=(self.width // 2, self.height - HUD_HEIGHT - 18))
+                warn,
+                (
+                    self.run_select_hit.x,
+                    self.run_select_hit.bottom + 8,
+                ),
             )
 
     def draw(self) -> None:
@@ -653,8 +809,11 @@ class GameWindow:
         if self.use_agent and self.run_select_hit.collidepoint(pos):
             self._refresh_runs()
             self.dropdown_open = True
-            self.dropdown_scroll = max(
-                0, self.selected_run_i - DROPDOWN_VISIBLE + 1
+            layout = self._dropdown_layout()
+            visible = layout[1] if layout is not None else DROPDOWN_VISIBLE
+            max_scroll = max(0, len(self.model_runs) - visible)
+            self.dropdown_scroll = min(
+                max_scroll, max(0, self.selected_run_i - visible + 1)
             )
             return
         for (w, h), rect in self.level_btns.items():
@@ -671,7 +830,9 @@ class GameWindow:
                 if self.use_agent and self.model_runs:
                     mouse = pygame.mouse.get_pos()
                     if self.dropdown_open and self._dropdown_panel.collidepoint(mouse):
-                        max_scroll = max(0, len(self.model_runs) - DROPDOWN_VISIBLE)
+                        layout = self._dropdown_layout()
+                        visible = layout[1] if layout is not None else DROPDOWN_VISIBLE
+                        max_scroll = max(0, len(self.model_runs) - visible)
                         self.dropdown_scroll = max(
                             0, min(max_scroll, self.dropdown_scroll - event.y)
                         )
