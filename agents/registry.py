@@ -59,6 +59,14 @@ def _load_q_learning(path: Path):
     return QLearningAgent.load(path)
 
 
+def _load_dqn(path: Path):
+    try:
+        from agents.dqn.agent import DQNAgent
+    except ImportError as exc:
+        raise FileNotFoundError("DQN cần PyTorch: pip install torch") from exc
+    return DQNAgent.load(path)
+
+
 AGENT_REGISTRY: dict[str, AgentSpec] = {
     "sarsa": AgentSpec(
         name="sarsa",
@@ -73,6 +81,13 @@ AGENT_REGISTRY: dict[str, AgentSpec] = {
         output_dir=_q_learning_output_dir(),
         train_command="python -m agents.q_learning.train",
         load_fn=_load_q_learning,
+    ),
+    "dqn": AgentSpec(
+        name="dqn",
+        label="DQN",
+        output_dir=agent_output_root("dqn"),
+        train_command="python -m agents.dqn.train",
+        load_fn=_load_dqn,
     ),
 }
 

@@ -62,6 +62,7 @@ def relative_to_absolute(direction: int, relative: int) -> int:
     raise ValueError(f"action tương đối không hợp lệ: {relative}")
 
 INITIAL_SNAKE_LENGTH = 3
+N_FEATURES = 41  # độ dài vector encode_features() cho DQN
 
 # Mức an toàn của một hướng đi (dùng cho 3 chiều safety trong state).
 #
@@ -457,6 +458,95 @@ class SnakeEnv(gym.Env):
             ],
             dtype=np.int64,
         )
+
+    # ------------------------------------------------------------------
+    # Feature vector liên tục cho DQN (cách B).
+    # Mọi giá trị đã chuẩn hoá theo kích thước bàn và đặt trong hệ quy chiếu
+    # tương đối với đầu rắn → một mạng dùng được cho 10×10, 15×20, 30×30.
+    # ------------------------------------------------------------------
+    def _relative_frame(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        """Vector (forward, right) theo hướng hiện tại."""
+        assert self.state is not None
+        d = self.state.direction
+        return DIRECTION_VECTORS[d], DIRECTION_VECTORS[RIGHT_TURN[d]]
+
+    def _to_relative(self, dx: int, dy: int) -> tuple[int, int]:
+        (fx, fy), (rx, ry) = self._relative_frame()
+        return dx * fx + dy * fy, dx * rx + dy * ry
+
+    def _ray(self, vx: int, vy: int, body: set[tuple[int, int]]) -> tuple[float, float]:
+        """Tia từ đầu theo (vx, vy): (1/khoảng cách tới vật cản, có thức ăn trên tia)."""
+        assert self.state is not None
+        x, y = self.state.snake[0]
+        dist = 0
+        food_seen = 0.0
+        while True:
+            x += vx
+            y += vy
+            dist += 1
+            if not self._in_bounds(x, y) or (x, y) in body:
+                return 1.0 / dist, food_seen
+            if (x, y) == self.state.food:
+                food_seen = 1.0
+
+    def encode_features(self) -> np.ndarray:
+        """
+        Vector float32 (N_FEATURES chiều) cho mạng neural:
+          - 4  : one-hot hướng tuyệt đối
+          - 2  : vị trí food tương đối (forward, right) / kích thước bàn
+          - 2  : vị trí đuôi tương đối (forward, right) / kích thước bàn
+          - 12 : one-hot safety (4 mức) × 3 hướng thẳng/trái/phải
+          - 3  : tỉ lệ ô tới được sau khi đi mỗi hướng (flood fill đầy đủ)
+          - 16 : 8 tia quanh đầu (tương đối) × (1/khoảng cách vật cản, thấy food)
+          - 2  : độ phủ bàn, tỉ lệ bước chưa ăn / giới hạn
+        """
+        assert self.state is not None
+        snake = self.state.snake
+        head = snake[0]
+        span = float(max(self.width, self.height))
+        n = float(self.n_cells)
+
+        # Tận dụng safety đã tính trong encode_observation (step/reset luôn gọi).
+        compact = self.encode_observation()
+        safety = (int(compact[2]), int(compact[3]), int(compact[4]))
+        direction = self.state.direction
+
+        feats: list[float] = [0.0] * 4
+        feats[direction] = 1.0
+
+        fx, fr = self._to_relative(self.state.food[0] - head[0], self.state.food[1] - head[1])
+        tx, tr = self._to_relative(snake[-1][0] - head[0], snake[-1][1] - head[1])
+        feats += [fx / span, fr / span, tx / span, tr / span]
+
+        for s in safety:
+            one = [0.0] * 4
+            one[s] = 1.0
+            feats += one
+
+        mask_after_move = (
+            self._cell_mask(snake[:-2]) if len(snake) > 2 else bytearray(self.n_cells)
+        )
+        for d in (direction, LEFT_TURN[direction], RIGHT_TURN[direction]):
+            ddx, ddy = DIRECTION_VECTORS[d]
+            nx, ny = head[0] + ddx, head[1] + ddy
+            if not self._in_bounds(nx, ny) or mask_after_move[ny * self.width + nx]:
+                feats.append(0.0)
+                continue
+            count, _ = self._flood_fill((nx, ny), mask_after_move, (-1, -1), enough=self.n_cells + 1)
+            feats.append(count / n)
+
+        body = set(snake[:-1])
+        (ffx, ffy), (rrx, rry) = self._relative_frame()
+        # 8 hướng theo hệ tương đối: thẳng, chéo phải-trước, phải, ... (chiều kim đồng hồ)
+        for a, b in ((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)):
+            vx = a * ffx + b * rrx
+            vy = a * ffy + b * rry
+            feats += list(self._ray(vx, vy, body))
+
+        feats.append(len(snake) / n)
+        limit = max(1, self.max_steps_without_food)
+        feats.append(min(1.0, self.state.steps_since_food / limit))
+        return np.asarray(feats, dtype=np.float32)
 
     def reset(
         self,

@@ -29,5 +29,11 @@ def select_action(
     *,
     greedy: bool = False,
 ) -> int:
-    """ε-greedy / greedy Q trên 3 hướng hợp lệ."""
+    """ε-greedy / greedy Q trên 3 hướng hợp lệ.
+
+    Agent có `uses_features = True` (DQN) nhận feature vector liên tục
+    từ env.encode_features() thay cho observation tabular.
+    """
+    if getattr(agent, "uses_features", False):
+        obs = env.encode_features()
     return agent.choose_action(obs, greedy=greedy)
