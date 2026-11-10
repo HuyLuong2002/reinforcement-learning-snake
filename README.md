@@ -107,3 +107,19 @@ Eval lúc đầu gần random (~0–1) vì Q-table khởi tạo 0. Số ~45 củ
 ## Q-learning vs SARSA
 
 Q-learning (off-policy) cập nhật bằng `max_a' Q(s', a')`. SARSA (on-policy) dùng `Q(s', a')` với action epsilon-greedy thật sự sẽ chọn. Hyperparameter mặc định giống nhau để so sánh công bằng. Xem `agents/q_learning/README.md`.
+
+## DQN (Deep Q-Network)
+
+Thay Q-table bằng mạng neural (MLP dueling 2×256), dùng replay buffer + target network + Double DQN.
+State **không** dùng 7 số rời rạc mà dùng `SnakeEnv.encode_features()`: vector 41 chiều liên tục
+(hướng, vị trí food/đuôi tương đối, safety one-hot, tỉ lệ ô tới được mỗi hướng, 8 tia quanh đầu,
+độ phủ bàn, đói). Mọi giá trị chuẩn hoá theo kích thước bàn → một model chơi được 10×10 / 15×20 / 30×30.
+
+```bash
+pip install torch
+python -m agents.dqn.train                    # chỉnh agents/dqn/hyperparameters.py
+python -m agents.dqn.train --episodes 2000 --grid 10x10 --device cuda
+python app.py --agent dqn --grid 30
+```
+
+Output: `output/dqn/<thời gian>/` (agent.pkl là checkpoint torch, log thêm cột loss, q_mean).

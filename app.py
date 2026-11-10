@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         "--agent",
         type=str,
         default="sarsa",
-        choices=["sarsa", "q_learning"],
+        choices=["sarsa", "q_learning", "dqn"],
         help="Thuật toán RL (mặc định: sarsa)",
     )
     parser.add_argument(
@@ -70,6 +70,10 @@ def main() -> None:
         env_cfg = DEFAULT_HYPERPARAMETERS.env
     elif args.agent == "q_learning":
         from agents.q_learning.hyperparameters import DEFAULT_HYPERPARAMETERS
+
+        env_cfg = DEFAULT_HYPERPARAMETERS.env
+    elif args.agent == "dqn":
+        from agents.dqn.hyperparameters import DEFAULT_HYPERPARAMETERS
 
         env_cfg = DEFAULT_HYPERPARAMETERS.env
     else:

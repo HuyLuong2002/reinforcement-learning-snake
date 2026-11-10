@@ -2,3 +2,4 @@ numpy>=1.24
 matplotlib>=3.7
 gymnasium>=1.0
 pygame-ce>=2.5
+torch>=2.1  # chỉ cần cho agents/dqn
